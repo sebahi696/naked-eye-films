@@ -1,22 +1,21 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import {
-  STAGE_LABELS, NEXT_ACTION_LABEL, getNextStage, checkGate, canAdvance, STAGE_ORDER
-} from "@/lib/stages";
-import type { Job, JobEvent, Profile } from "@/lib/database.types";
+import { NEXT_ACTION_LABEL, getNextStage, checkGate, canAdvance, STAGE_ORDER } from "@/lib/stages";
+import type { Job, JobEvent } from "@/lib/database.types";
+import type { SessionUser } from "@/lib/auth";
 import StageBadge from "@/components/StageBadge";
 import EventLog from "@/components/EventLog";
 import NavBar from "@/components/NavBar";
 import { useRouter, useParams } from "next/navigation";
+import { api } from "@/lib/client-api";
 
 export default function JobCardPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [events, setEvents] = useState<JobEvent[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [note, setNote] = useState("");
   const [folderEdit, setFolderEdit] = useState("");
   const [advancing, setAdvancing] = useState(false);
@@ -24,68 +23,51 @@ export default function JobCardPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-
-      const [{ data: prof }, { data: j }, { data: evts }] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", user.id).single(),
-        supabase.from("jobs").select("*").eq("id", id).single(),
-        supabase.from("job_events").select("*").eq("job_id", id).order("created_at", { ascending: false }),
-      ]);
-      setProfile(prof);
-      setJob(j);
-      setFolderEdit(j?.studio_folder ?? "");
-      setEvents(evts ?? []);
-    }
-    load();
-  }, [id, router]);
+    Promise.all([
+      api<{ user: SessionUser }>("/api/auth/me"),
+      api<{ job: Job; events: JobEvent[] }>(`/api/jobs/${id}`),
+    ]).then(([me, data]) => {
+      setUser(me.user);
+      setJob(data.job);
+      setFolderEdit(data.job.studio_folder ?? "");
+      setEvents(data.events);
+    });
+  }, [id]);
 
   async function advance() {
-    if (!job || !profile) return;
+    if (!job || !user) return;
     const gate = checkGate(job, job.stage);
     if (gate.blocked) { setError(gate.reason ?? "Blocked"); return; }
-    const next = getNextStage(job.stage);
-    if (!next) return;
 
     setAdvancing(true);
-    const updates: Partial<Job> = { stage: next };
-    if (next === "waiting_script" || next === "editing") updates.script_provided = job.script_provided;
-    if (folderEdit && !job.studio_folder) updates.studio_folder = folderEdit;
-
-    const { error: upErr } = await supabase.from("jobs").update(updates).eq("id", job.id);
-    if (upErr) { setError(upErr.message); setAdvancing(false); return; }
-
-    await supabase.from("job_events").insert({
-      job_id: job.id,
-      actor_role: profile.role,
-      actor_name: profile.full_name,
-      stage_from: job.stage,
-      stage_to: next,
-      note: note || null,
-    });
-
-    // Fire WhatsApp if moving to waiting_script (script still needed)
-    if (next === "waiting_script" && !job.script_provided) {
-      await fetch("/api/notify", {
-        method: "POST",
+    setError("");
+    try {
+      const { job: updated } = await api<{ job: Job }>(`/api/jobs/${job.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "script_needed", jobId: job.id }),
+        body: JSON.stringify({
+          action: "advance",
+          note: note || null,
+          studio_folder: folderEdit || job.studio_folder,
+        }),
       });
-    }
 
-    setJob((j) => j ? { ...j, ...updates } : j);
-    setEvents((ev) => [{
-      id: Date.now().toString(),
-      job_id: job.id,
-      actor_role: profile.role,
-      actor_name: profile.full_name,
-      stage_from: job.stage,
-      stage_to: next,
-      note: note || null,
-      created_at: new Date().toISOString(),
-    }, ...ev]);
-    setNote("");
+      if (updated.stage === "waiting_script" && !job.script_provided) {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ type: "script_needed", jobId: job.id }),
+        });
+      }
+
+      const evRes = await api<{ events: JobEvent[] }>(`/api/jobs/${job.id}`);
+      setJob(updated);
+      setEvents(evRes.events);
+      setNote("");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to advance");
+    }
     setAdvancing(false);
   }
 
@@ -95,6 +77,7 @@ export default function JobCardPage() {
     await fetch("/api/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ type: "script_needed", jobId: job.id }),
     });
     setReminding(false);
@@ -102,21 +85,29 @@ export default function JobCardPage() {
 
   async function saveFolder() {
     if (!job) return;
-    await supabase.from("jobs").update({ studio_folder: folderEdit }).eq("id", job.id);
-    setJob((j) => j ? { ...j, studio_folder: folderEdit } : j);
+    const { job: updated } = await api<{ job: Job }>(`/api/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studio_folder: folderEdit }),
+    });
+    setJob(updated);
   }
 
   async function markScriptProvided() {
     if (!job) return;
-    await supabase.from("jobs").update({ script_provided: true }).eq("id", job.id);
-    setJob((j) => j ? { ...j, script_provided: true } : j);
+    const { job: updated } = await api<{ job: Job }>(`/api/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script_provided: true }),
+    });
+    setJob(updated);
   }
 
-  if (!job || !profile) return <div className="flex items-center justify-center h-screen text-[#666]">Loading…</div>;
+  if (!job || !user) return <div className="flex items-center justify-center h-screen text-[#666]">Loading…</div>;
 
   const nextStage = getNextStage(job.stage);
   const gate = checkGate(job, job.stage);
-  const userCanAdvance = canAdvance(job, profile.role);
+  const userCanAdvance = canAdvance(job, user.role);
   const stageIndex = STAGE_ORDER.indexOf(job.stage);
 
   return (
@@ -125,7 +116,6 @@ export default function JobCardPage() {
         <button onClick={() => router.back()} className="text-[#666] text-sm">← Back</button>
       </div>
 
-      {/* Header */}
       <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-5 mb-4">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div>
@@ -134,15 +124,11 @@ export default function JobCardPage() {
           </div>
           <StageBadge stage={job.stage} />
         </div>
-
-        {/* Stage progress bar */}
         <div className="flex gap-1 mt-3">
           {STAGE_ORDER.map((s, i) => (
             <div key={s} className={`h-1.5 flex-1 rounded-full ${i <= stageIndex ? "bg-[#e8c84a]" : "bg-[#2a2a2a]"}`} />
           ))}
         </div>
-
-        {/* Meta */}
         <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
           {job.shoot_date && (
             <div>
@@ -165,28 +151,22 @@ export default function JobCardPage() {
         </div>
       </div>
 
-      {/* Studio folder */}
       <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
         <p className="text-xs text-[#666] uppercase tracking-wide mb-2">Studio Drive Folder</p>
         <div className="flex gap-2">
-          <input
-            value={folderEdit}
-            onChange={(e) => setFolderEdit(e.target.value)}
+          <input value={folderEdit} onChange={(e) => setFolderEdit(e.target.value)}
             placeholder="e.g. NEF/2026/RamiWedding"
-            className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e8c84a]"
-          />
+            className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e8c84a]" />
           <button onClick={saveFolder} className="text-[#e8c84a] text-sm px-3">Save</button>
         </div>
       </div>
 
-      {/* Script */}
       <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs text-[#666] uppercase tracking-wide">Script</p>
-          {!job.script_provided && (
+          {!job.script_provided ? (
             <span className="text-xs bg-[#2e1a0a] text-[#e8903a] px-2 py-0.5 rounded-full">Missing</span>
-          )}
-          {job.script_provided && (
+          ) : (
             <span className="text-xs bg-[#1a2e1a] text-[#5bbf6b] px-2 py-0.5 rounded-full">Provided</span>
           )}
         </div>
@@ -205,17 +185,12 @@ export default function JobCardPage() {
         )}
       </div>
 
-      {/* Next action */}
       {nextStage && userCanAdvance && (
         <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
           <p className="text-xs text-[#666] uppercase tracking-wide mb-3">Next action</p>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Add a note (optional)"
-            rows={2}
-            className="w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white resize-none focus:outline-none focus:border-[#e8c84a] mb-3"
-          />
+          <textarea value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder="Add a note (optional)" rows={2}
+            className="w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white resize-none focus:outline-none focus:border-[#e8c84a] mb-3" />
           {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
           {gate.blocked ? (
             <p className="text-[#e8903a] text-sm">{gate.reason}</p>
@@ -234,7 +209,6 @@ export default function JobCardPage() {
         </div>
       )}
 
-      {/* Event log */}
       <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4">
         <p className="text-xs text-[#666] uppercase tracking-wide mb-3">Activity</p>
         <EventLog events={events} />

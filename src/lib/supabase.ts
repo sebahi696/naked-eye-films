@@ -28,9 +28,13 @@ export const supabase = new Proxy({} as SupabaseClient, {
 
 // Server / API route client (uses service role to bypass RLS when needed)
 export function createServiceClient(): SupabaseClient {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false } }
-  );
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.SUPABASE_SECRET_KEY;
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !key) {
+    throw new Error("Supabase service credentials not configured");
+  }
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, key, {
+    auth: { persistSession: false },
+  });
 }

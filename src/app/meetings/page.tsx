@@ -1,13 +1,11 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { api } from "@/lib/client-api";
 import type { Meeting } from "@/lib/database.types";
 import NavBar from "@/components/NavBar";
-import { useRouter } from "next/navigation";
 
 export default function MeetingsPage() {
-  const router = useRouter();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -15,46 +13,48 @@ export default function MeetingsPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("meetings").select("*").order("date").order("time");
-      setMeetings(data ?? []);
-      setLoading(false);
-    }
-    load();
-  }, [router]);
+    api<{ meetings: Meeting[] }>("/api/meetings")
+      .then((d) => setMeetings(d.meetings))
+      .finally(() => setLoading(false));
+  }, []);
 
   async function addMeeting(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const { data, error } = await supabase.from("meetings").insert({
-      title: form.title,
-      client_or_lead: form.client_or_lead || null,
-      date: form.date,
-      time: form.time,
-      type: form.type as any,
-      location: (form as any).location || null,
-      notes: form.notes || null,
-    }).select().single();
-    setSaving(false);
-    if (error || !data) return;
-    setMeetings((m) => [...m, data].sort((a, b) => a.date.localeCompare(b.date)));
+    const { meeting } = await api<{ meeting: Meeting }>("/api/meetings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: form.title,
+        client_or_lead: form.client_or_lead || null,
+        date: form.date,
+        time: form.time,
+        type: form.type,
+        location: form.location || null,
+        notes: form.notes || null,
+      }),
+    });
+    setMeetings((m) => [...m, meeting].sort((a, b) => a.date.localeCompare(b.date)));
     setShowForm(false);
     setForm({ title: "", client_or_lead: "", date: "", time: "", type: "meeting", location: "", notes: "" });
+    setSaving(false);
 
-    // Remind Hussein about shoot tomorrow
-    if (data.type === "shoot") {
+    if (meeting.type === "shoot") {
       await fetch("/api/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "shoot_created", meetingId: data.id }),
+        credentials: "include",
+        body: JSON.stringify({ type: "shoot_created", meetingId: meeting.id }),
       });
     }
   }
 
   async function deleteMeeting(id: string) {
-    await supabase.from("meetings").delete().eq("id", id);
+    await api("/api/meetings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
     setMeetings((m) => m.filter((x) => x.id !== id));
   }
 

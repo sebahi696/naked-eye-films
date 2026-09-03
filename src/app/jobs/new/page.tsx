@@ -1,8 +1,8 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import { api } from "@/lib/client-api";
 import NavBar from "@/components/NavBar";
 
 export default function NewJobPage() {
@@ -31,34 +31,37 @@ export default function NewJobPage() {
     setLoading(true);
     setError("");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push("/login"); return; }
-
-    const { data, error: err } = await supabase.from("jobs").insert({
-      client_name: form.client_name,
-      job_type: form.job_type as any,
-      deliverable: form.deliverable,
-      shoot_date: form.shoot_date || null,
-      script_notes: form.script_notes || null,
-      script_provided: form.script_provided,
-      route: form.route as any,
-      agency_name: form.agency_name || null,
-      due_date: form.due_date || null,
-      created_by: user.id,
-    }).select().single();
-
-    if (err || !data) { setError(err?.message ?? "Failed to create job"); setLoading(false); return; }
-
-    // If script not provided, notify Hussein
-    if (!form.script_provided) {
-      await fetch("/api/notify", {
+    try {
+      const { job } = await api<{ job: { id: string } }>("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "order_created", jobId: data.id }),
+        body: JSON.stringify({
+          client_name: form.client_name,
+          job_type: form.job_type,
+          deliverable: form.deliverable,
+          shoot_date: form.shoot_date || null,
+          script_notes: form.script_notes || null,
+          script_provided: form.script_provided,
+          route: form.route,
+          agency_name: form.agency_name || null,
+          due_date: form.due_date || null,
+        }),
       });
-    }
 
-    router.push(`/jobs/${data.id}`);
+      if (!form.script_provided) {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ type: "order_created", jobId: job.id }),
+        });
+      }
+
+      router.push(`/jobs/${job.id}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create job");
+      setLoading(false);
+    }
   }
 
   return (

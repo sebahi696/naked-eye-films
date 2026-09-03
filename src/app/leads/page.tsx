@@ -1,10 +1,9 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { api } from "@/lib/client-api";
 import type { Lead, LeadStatus } from "@/lib/database.types";
 import NavBar from "@/components/NavBar";
-import { useRouter } from "next/navigation";
 
 const STATUS_COLORS: Record<LeadStatus, string> = {
   new: "bg-[#1a1a2e] text-[#7b8ec8]",
@@ -17,7 +16,6 @@ const STATUS_COLORS: Record<LeadStatus, string> = {
 const STATUSES: LeadStatus[] = ["new", "contacted", "proposal", "won", "lost"];
 
 export default function LeadsPage() {
-  const router = useRouter();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -25,37 +23,39 @@ export default function LeadsPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("leads").select("*").order("follow_up_date", { ascending: true });
-      setLeads(data ?? []);
-      setLoading(false);
-    }
-    load();
-  }, [router]);
+    api<{ leads: Lead[] }>("/api/leads")
+      .then((d) => setLeads(d.leads))
+      .finally(() => setLoading(false));
+  }, []);
 
   async function addLead(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const { data, error } = await supabase.from("leads").insert({
-      contact_name: form.contact_name,
-      company: form.company || null,
-      source: form.source || null,
-      follow_up_date: form.follow_up_date || null,
-      notes: form.notes || null,
-      status: "new",
-    }).select().single();
-    setSaving(false);
-    if (error || !data) return;
-    setLeads((l) => [data, ...l]);
+    const { lead } = await api<{ lead: Lead }>("/api/leads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contact_name: form.contact_name,
+        company: form.company || null,
+        source: form.source || null,
+        follow_up_date: form.follow_up_date || null,
+        notes: form.notes || null,
+        status: "new",
+      }),
+    });
+    setLeads((l) => [lead, ...l]);
     setShowForm(false);
     setForm({ contact_name: "", company: "", source: "", follow_up_date: "", notes: "" });
+    setSaving(false);
   }
 
   async function updateStatus(id: string, status: LeadStatus) {
-    await supabase.from("leads").update({ status }).eq("id", id);
-    setLeads((l) => l.map((lead) => lead.id === id ? { ...lead, status } : lead));
+    const { lead } = await api<{ lead: Lead }>(`/api/leads/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    setLeads((l) => l.map((item) => (item.id === id ? lead : item)));
   }
 
   if (loading) return <div className="flex items-center justify-center h-screen text-[#666]">Loading…</div>;

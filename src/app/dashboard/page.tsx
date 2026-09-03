@@ -1,40 +1,31 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { api } from "@/lib/client-api";
 import type { Job, Lead, Meeting } from "@/lib/database.types";
 import NavBar from "@/components/NavBar";
 import StageBadge from "@/components/StageBadge";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-
-      const today = new Date().toISOString().split("T")[0];
-      const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
-
-      const [{ data: j }, { data: l }, { data: m }] = await Promise.all([
-        supabase.from("jobs").select("*").order("due_date", { ascending: true }),
-        supabase.from("leads").select("*").order("follow_up_date", { ascending: true }),
-        supabase.from("meetings").select("*").gte("date", today).lte("date", nextWeek).order("date"),
-      ]);
-      setJobs(j ?? []);
-      setLeads(l ?? []);
-      setMeetings(m ?? []);
+    const today = new Date().toISOString().split("T")[0];
+    Promise.all([
+      api<{ jobs: Job[] }>("/api/jobs"),
+      api<{ leads: Lead[] }>("/api/leads"),
+      api<{ meetings: Meeting[] }>(`/api/meetings?from=${today}`),
+    ]).then(([j, l, m]) => {
+      setJobs(j.jobs);
+      setLeads(l.leads);
+      setMeetings(m.meetings);
       setLoading(false);
-    }
-    load();
-  }, [router]);
+    });
+  }, []);
 
   if (loading) return <div className="flex items-center justify-center h-screen text-[#666]">Loading…</div>;
 
