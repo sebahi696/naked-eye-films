@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --border: #2a2a2a;
+  --muted: #666;
+  --accent: #e8c84a;
+}
+
+body {
+  background: var(--bg);
+  color: #f5f5f5;
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* Stage badge colours */
+.stage-new_order      { background: #1a1a2e; color: #7b8ec8; }
+.stage-shoot_booked   { background: #1a2e1e; color: #6bbf7a; }
+.stage-shot           { background: #1a2a1e; color: #5fb56b; }
+.stage-sd_received    { background: #2a1a2e; color: #b07bcc; }
+.stage-on_drive       { background: #2e1a2a; color: #cc7bb2; }
+.stage-waiting_script { background: #2e1a0a; color: #e8903a; }
+.stage-editing        { background: #1a2a2e; color: #5bc4cc; }
+.stage-review         { background: #2e2a0a; color: #e8c84a; }
+.stage-sent           { background: #1a2e1a; color: #5bbf6b; }
