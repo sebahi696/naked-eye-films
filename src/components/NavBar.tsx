@@ -3,25 +3,33 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/client-api";
-
-const links = [
-  { href: "/", label: "Queue" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/jobs/new", label: "+ Job" },
-  { href: "/leads", label: "Leads" },
-  { href: "/meetings", label: "Meetings" },
-];
+import type { SessionUser } from "@/lib/auth";
 
 export default function NavBar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [user, setUser] = useState<SessionUser | null>(null);
 
   useEffect(() => {
-    api<{ user: { is_admin: boolean } }>("/api/auth/me")
-      .then((d) => setIsAdmin(d.user.is_admin))
+    api<{ user: SessionUser }>("/api/auth/me")
+      .then((d) => setUser(d.user))
       .catch(() => {});
   }, []);
+
+  const isOwner = user?.role === "owner" || user?.is_admin;
+
+  const links = isOwner
+    ? [
+        { href: "/", label: "Queue" },
+        { href: "/dashboard", label: "Today" },
+        { href: "/jobs/new", label: "+ Task" },
+        { href: "/meetings", label: "Calendar" },
+        { href: "/leads", label: "Leads" },
+      ]
+    : [
+        { href: "/", label: "My queue" },
+        { href: "/meetings", label: "Calendar" },
+      ];
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
@@ -29,26 +37,26 @@ export default function NavBar() {
   }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-[#141414] border-t border-[#2a2a2a] z-50 md:static md:border-t-0 md:border-b">
-      <div className="max-w-2xl mx-auto flex items-center justify-around md:justify-start md:gap-6 md:px-6 md:py-3 overflow-x-auto">
+    <nav className="fixed bottom-0 left-0 right-0 bg-[#141414]/95 backdrop-blur border-t border-[#2a2a2a] z-50 safe-pb">
+      <div className="max-w-2xl mx-auto flex items-center justify-around px-1">
         {links.map((l) => (
           <Link
             key={l.href}
             href={l.href}
-            className={`flex flex-col md:flex-row items-center gap-0.5 md:gap-1 py-3 md:py-0 px-2 text-xs md:text-sm font-medium transition-colors whitespace-nowrap ${
-              pathname === l.href ? "text-[#e8c84a]" : "text-[#888] hover:text-white"
+            className={`py-3.5 px-2 text-[11px] font-medium ${
+              pathname === l.href ? "text-[#e8c84a]" : "text-[#777]"
             }`}
           >
             {l.label}
           </Link>
         ))}
-        {isAdmin && (
-          <Link href="/admin" className={`py-3 md:py-0 px-2 text-xs md:text-sm font-medium whitespace-nowrap ${pathname === "/admin" ? "text-[#e8c84a]" : "text-[#888]"}`}>
+        {isOwner && (
+          <Link href="/admin" className={`py-3.5 px-2 text-[11px] font-medium ${pathname === "/admin" ? "text-[#e8c84a]" : "text-[#777]"}`}>
             Admin
           </Link>
         )}
-        <button onClick={signOut} className="text-[#666] text-xs md:text-sm py-3 md:py-0 px-2 ml-auto whitespace-nowrap">
-          Sign out
+        <button onClick={signOut} className="text-[#555] text-[11px] py-3.5 px-2">
+          Out
         </button>
       </div>
     </nav>

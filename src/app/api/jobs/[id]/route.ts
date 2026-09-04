@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (body.action === "advance") {
     const gate = checkGate(job as Job, job.stage as Stage);
     if (gate.blocked) return NextResponse.json({ error: gate.reason }, { status: 400 });
-    const next = getNextStage(job.stage as Stage);
+    const next = getNextStage(job.stage as Stage, (job as Job).assignee_role);
     if (!next) return NextResponse.json({ error: "Already at final stage" }, { status: 400 });
 
     const updates: Record<string, unknown> = { stage: next };

@@ -44,6 +44,10 @@ export async function POST(req: NextRequest) {
       if (!lead) return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
       messageBody = messages.followUp(lead.contact_name);
       sent = await sendWhatsAppMessage({ to: HUSSEIN_WA, body: messageBody });
+
+    } else if (type === "team_ping" && body.message) {
+      messageBody = `Naked Eye Films: ${body.message}`;
+      sent = await sendWhatsAppMessage({ to: HUSSEIN_WA, body: messageBody });
     }
 
     // Log the reminder

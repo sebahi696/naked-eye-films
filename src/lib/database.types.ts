@@ -11,9 +11,11 @@ export type Stage =
 
 export type JobType = "photoshoot" | "video" | "mixed";
 export type RouteType = "hussein" | "agency";
-export type UserRole = "owner" | "editor" | "admin";
+export type UserRole = "owner" | "editor" | "admin" | "designer";
+export type AssigneeRole = "editor" | "designer";
 export type LeadStatus = "new" | "contacted" | "proposal" | "won" | "lost";
 export type MeetingType = "shoot" | "meeting";
+export type PingKind = "question" | "done" | "reminder" | "need_script";
 
 export interface Job {
   id: string;
@@ -28,6 +30,8 @@ export interface Job {
   due_date: string | null;
   stage: Stage;
   studio_folder: string | null;
+  assignee_role: AssigneeRole;
+  reels_count: number | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -66,6 +70,18 @@ export interface Meeting {
   created_at: string;
 }
 
+export interface Ping {
+  id: string;
+  job_id: string | null;
+  from_user_id: string | null;
+  from_name: string;
+  to_role: string;
+  kind: PingKind;
+  message: string;
+  read_at: string | null;
+  created_at: string;
+}
+
 export interface WhatsappReminder {
   id: string;
   job_id: string | null;
@@ -82,17 +98,4 @@ export interface Profile {
   phone: string | null;
   role: UserRole;
   created_at: string;
-}
-
-export interface Database {
-  public: {
-    Tables: {
-      jobs: { Row: Job; Insert: Omit<Job, "id" | "created_at" | "updated_at">; Update: Partial<Job> };
-      job_events: { Row: JobEvent; Insert: Omit<JobEvent, "id" | "created_at">; Update: Partial<JobEvent> };
-      leads: { Row: Lead; Insert: Omit<Lead, "id" | "created_at">; Update: Partial<Lead> };
-      meetings: { Row: Meeting; Insert: Omit<Meeting, "id" | "created_at">; Update: Partial<Meeting> };
-      whatsapp_reminders: { Row: WhatsappReminder; Insert: Omit<WhatsappReminder, "id">; Update: Partial<WhatsappReminder> };
-      profiles: { Row: Profile; Insert: Omit<Profile, "created_at">; Update: Partial<Profile> };
-    };
-  };
 }

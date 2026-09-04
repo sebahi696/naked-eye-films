@@ -84,6 +84,7 @@ export default function AdminPage() {
           <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
             className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white">
             <option value="editor">Editor</option>
+            <option value="designer">Designer</option>
             <option value="owner">Owner (Hussein)</option>
             <option value="admin">Admin</option>
           </select>

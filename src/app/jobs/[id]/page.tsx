@@ -1,8 +1,15 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
-import { NEXT_ACTION_LABEL, getNextStage, checkGate, canAdvance, STAGE_ORDER } from "@/lib/stages";
-import type { Job, JobEvent } from "@/lib/database.types";
+import {
+  NEXT_ACTION_LABEL,
+  getNextStage,
+  checkGate,
+  canAdvance,
+  STAGE_ORDER,
+  EDITOR_TASK_STAGES,
+} from "@/lib/stages";
+import type { Job, JobEvent, PingKind } from "@/lib/database.types";
 import type { SessionUser } from "@/lib/auth";
 import StageBadge from "@/components/StageBadge";
 import EventLog from "@/components/EventLog";
@@ -18,9 +25,11 @@ export default function JobCardPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [note, setNote] = useState("");
   const [folderEdit, setFolderEdit] = useState("");
+  const [pingText, setPingText] = useState("");
   const [advancing, setAdvancing] = useState(false);
-  const [reminding, setReminding] = useState(false);
+  const [pinging, setPinging] = useState(false);
   const [error, setError] = useState("");
+  const [pingOk, setPingOk] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -51,16 +60,6 @@ export default function JobCardPage() {
           studio_folder: folderEdit || job.studio_folder,
         }),
       });
-
-      if (updated.stage === "waiting_script" && !job.script_provided) {
-        await fetch("/api/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ type: "script_needed", jobId: job.id }),
-        });
-      }
-
       const evRes = await api<{ events: JobEvent[] }>(`/api/jobs/${job.id}`);
       setJob(updated);
       setEvents(evRes.events);
@@ -69,18 +68,6 @@ export default function JobCardPage() {
       setError(err instanceof Error ? err.message : "Failed to advance");
     }
     setAdvancing(false);
-  }
-
-  async function sendReminder() {
-    if (!job) return;
-    setReminding(true);
-    await fetch("/api/notify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ type: "script_needed", jobId: job.id }),
-    });
-    setReminding(false);
   }
 
   async function saveFolder() {
@@ -103,109 +90,160 @@ export default function JobCardPage() {
     setJob(updated);
   }
 
+  async function sendPing(kind: PingKind, message?: string) {
+    if (!job) return;
+    setPinging(true);
+    setPingOk("");
+    try {
+      await api("/api/pings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: job.id,
+          kind,
+          message: message || pingText || defaultPing(kind, job.client_name),
+        }),
+      });
+      setPingText("");
+      setPingOk("Sent to Hussein");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Ping failed");
+    }
+    setPinging(false);
+  }
+
   if (!job || !user) return <div className="flex items-center justify-center h-screen text-[#666]">Loading…</div>;
 
-  const nextStage = getNextStage(job.stage);
+  const isEditTask = (job.assignee_role ?? "editor") === "editor" || job.assignee_role === "designer";
+  const path = isEditTask ? EDITOR_TASK_STAGES : STAGE_ORDER;
+  const nextStage = getNextStage(job.stage, job.assignee_role);
   const gate = checkGate(job, job.stage);
   const userCanAdvance = canAdvance(job, user.role);
-  const stageIndex = STAGE_ORDER.indexOf(job.stage);
+  const stageIndex = Math.max(0, path.indexOf(job.stage));
+  const showStudio = !isEditTask || ["sd_received", "on_drive", "shot"].includes(job.stage);
+  const isTeam = user.role === "editor" || user.role === "designer";
 
   return (
     <div className="max-w-2xl mx-auto px-4 pb-24 md:pb-8 pt-6">
-      <div className="flex items-center gap-3 mb-2">
-        <button onClick={() => router.back()} className="text-[#666] text-sm">← Back</button>
-      </div>
+      <button type="button" onClick={() => router.back()} className="text-[#666] text-sm mb-3">← Back</button>
 
-      <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-5 mb-4">
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <div>
-            <h1 className="text-xl font-semibold">{job.client_name}</h1>
-            <p className="text-[#666] text-sm capitalize mt-0.5">{job.job_type} · {job.deliverable}</p>
+      <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-5 mb-3">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold truncate">{job.client_name}</h1>
+            <p className="text-[#666] text-sm mt-0.5 capitalize">
+              {job.assignee_role ?? "editor"}
+              {job.reels_count ? ` · ${job.reels_count} reels` : ` · ${job.deliverable}`}
+            </p>
           </div>
           <StageBadge stage={job.stage} />
         </div>
         <div className="flex gap-1 mt-3">
-          {STAGE_ORDER.map((s, i) => (
+          {path.map((s, i) => (
             <div key={s} className={`h-1.5 flex-1 rounded-full ${i <= stageIndex ? "bg-[#e8c84a]" : "bg-[#2a2a2a]"}`} />
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
-          {job.shoot_date && (
-            <div>
-              <p className="text-[#666] text-xs">Shoot date</p>
-              <p>{new Date(job.shoot_date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</p>
-            </div>
-          )}
           {job.due_date && (
             <div>
-              <p className="text-[#666] text-xs">Due date</p>
+              <p className="text-[#666] text-xs">Due</p>
               <p className={new Date(job.due_date) < new Date() ? "text-red-400" : ""}>
-                {new Date(job.due_date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                {new Date(job.due_date + "T00:00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
               </p>
             </div>
           )}
           <div>
-            <p className="text-[#666] text-xs">Route</p>
-            <p>{job.route === "hussein" ? "Hussein → Client" : `Agency: ${job.agency_name ?? "—"}`}</p>
+            <p className="text-[#666] text-xs">Final goes to</p>
+            <p>{job.route === "hussein" ? "Hussein" : job.agency_name ?? "Agency"}</p>
           </div>
         </div>
       </div>
 
-      <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
-        <p className="text-xs text-[#666] uppercase tracking-wide mb-2">Studio Drive Folder</p>
-        <div className="flex gap-2">
-          <input value={folderEdit} onChange={(e) => setFolderEdit(e.target.value)}
-            placeholder="e.g. NEF/2026/RamiWedding"
-            className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e8c84a]" />
-          <button onClick={saveFolder} className="text-[#e8c84a] text-sm px-3">Save</button>
+      {showStudio && (
+        <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
+          <p className="text-xs text-[#666] uppercase tracking-wide mb-2">Studio folder</p>
+          <div className="flex gap-2">
+            <input value={folderEdit} onChange={(e) => setFolderEdit(e.target.value)}
+              placeholder="NEF/2026/BrandName"
+              className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#e8c84a]" />
+            <button type="button" onClick={saveFolder} className="text-[#e8c84a] text-sm px-3">Save</button>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
+      <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs text-[#666] uppercase tracking-wide">Script</p>
-          {!job.script_provided ? (
-            <span className="text-xs bg-[#2e1a0a] text-[#e8903a] px-2 py-0.5 rounded-full">Missing</span>
-          ) : (
-            <span className="text-xs bg-[#1a2e1a] text-[#5bbf6b] px-2 py-0.5 rounded-full">Provided</span>
-          )}
+          <span className={`text-xs px-2 py-0.5 rounded-full ${job.script_provided || job.script_notes ? "bg-[#1a2e1a] text-[#5bbf6b]" : "bg-[#2e1a0a] text-[#e8903a]"}`}>
+            {job.script_provided || job.script_notes ? "Ready" : "Missing"}
+          </span>
         </div>
-        {job.script_notes && <p className="text-sm text-[#aaa] mb-3">{job.script_notes}</p>}
-        {!job.script_provided && (
-          <div className="flex gap-2">
-            <button onClick={markScriptProvided}
-              className="text-sm bg-[#1a2e1a] text-[#5bbf6b] px-3 py-1.5 rounded-lg">
-              Mark script provided
-            </button>
-            <button onClick={sendReminder} disabled={reminding}
-              className="text-sm text-[#e8903a] border border-[#2e1a0a] px-3 py-1.5 rounded-lg disabled:opacity-50">
-              {reminding ? "Sending…" : "Remind Hussein"}
-            </button>
-          </div>
+        {job.script_notes ? (
+          <p className="text-sm text-[#aaa] whitespace-pre-wrap">{job.script_notes}</p>
+        ) : (
+          <p className="text-sm text-[#555]">No script yet</p>
+        )}
+        {!job.script_provided && (user.role === "owner" || user.is_admin) && (
+          <button type="button" onClick={markScriptProvided}
+            className="mt-3 text-sm bg-[#1a2e1a] text-[#5bbf6b] px-3 py-2 rounded-lg">
+            Mark script ready
+          </button>
         )}
       </div>
 
       {nextStage && userCanAdvance && (
-        <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-4">
-          <p className="text-xs text-[#666] uppercase tracking-wide mb-3">Next action</p>
+        <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
+          <p className="text-xs text-[#666] uppercase tracking-wide mb-2">Next</p>
           <textarea value={note} onChange={(e) => setNote(e.target.value)}
-            placeholder="Add a note (optional)" rows={2}
+            placeholder="Optional note" rows={2}
             className="w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white resize-none focus:outline-none focus:border-[#e8c84a] mb-3" />
           {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
           {gate.blocked ? (
             <p className="text-[#e8903a] text-sm">{gate.reason}</p>
           ) : (
-            <button onClick={advance} disabled={advancing}
-              className="w-full bg-[#e8c84a] text-black font-semibold py-3 rounded-xl text-sm disabled:opacity-50">
+            <button type="button" onClick={advance} disabled={advancing}
+              className="w-full bg-[#e8c84a] text-black font-semibold py-3.5 rounded-xl text-sm disabled:opacity-50">
               {advancing ? "Updating…" : NEXT_ACTION_LABEL[job.stage]}
             </button>
           )}
         </div>
       )}
 
+      {/* Team → Hussein pings */}
+      {isTeam && (
+        <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
+          <p className="text-xs text-[#666] uppercase tracking-wide mb-3">Ping Hussein</p>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button type="button" disabled={pinging} onClick={() => sendPing("need_script")}
+              className="py-3 rounded-xl text-xs font-medium border border-[#2e1a0a] text-[#e8903a]">
+              Need script
+            </button>
+            <button type="button" disabled={pinging} onClick={() => sendPing("done")}
+              className="py-3 rounded-xl text-xs font-medium border border-[#1a2e1a] text-[#5bbf6b]">
+              Work done
+            </button>
+            <button type="button" disabled={pinging} onClick={() => sendPing("reminder")}
+              className="py-3 rounded-xl text-xs font-medium border border-[#2a2a2a] text-[#aaa]">
+              Reminder
+            </button>
+            <button type="button" disabled={pinging || !pingText.trim()} onClick={() => sendPing("question", pingText.trim())}
+              className="py-3 rounded-xl text-xs font-medium border border-[#2a2a2a] text-[#7b8ec8] disabled:opacity-40">
+              Ask question
+            </button>
+          </div>
+          <input
+            value={pingText}
+            onChange={(e) => setPingText(e.target.value)}
+            placeholder="Quick question for Hussein…"
+            className="w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#e8c84a]"
+          />
+          {pingOk && <p className="text-[#5bbf6b] text-xs mt-2">{pingOk}</p>}
+        </div>
+      )}
+
       {job.stage === "sent" && (
-        <div className="bg-[#1a2e1a] border border-[#2a4a2a] rounded-xl p-4 mb-4 text-center">
-          <p className="text-[#5bbf6b] font-medium">Job complete — Sent to client</p>
+        <div className="bg-[#1a2e1a] border border-[#2a4a2a] rounded-xl p-4 mb-3 text-center">
+          <p className="text-[#5bbf6b] font-medium">Sent</p>
         </div>
       )}
 
@@ -217,4 +255,11 @@ export default function JobCardPage() {
       <NavBar />
     </div>
   );
+}
+
+function defaultPing(kind: PingKind, brand: string) {
+  if (kind === "need_script") return `Need script for ${brand}`;
+  if (kind === "done") return `Done — ${brand} ready for review`;
+  if (kind === "reminder") return `Reminder: ${brand} still waiting on you`;
+  return `Question about ${brand}`;
 }

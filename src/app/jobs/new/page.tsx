@@ -4,166 +4,167 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/client-api";
 import NavBar from "@/components/NavBar";
+import QuickDate from "@/components/QuickDate";
 
-export default function NewJobPage() {
+export default function NewTaskPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
     client_name: "",
-    job_type: "video",
-    deliverable: "",
-    shoot_date: "",
+    assignee_role: "editor" as "editor" | "designer",
+    reels_count: "3",
     script_notes: "",
-    script_provided: false,
+    due_date: "",
     route: "hussein",
     agency_name: "",
-    due_date: "",
-    notes: "",
   });
 
-  function set(key: string, value: string | boolean) {
+  function set(key: string, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!form.due_date) { setError("Pick a due date"); return; }
     setLoading(true);
     setError("");
-
     try {
+      const reels = form.assignee_role === "editor" ? Number(form.reels_count) || null : null;
       const { job } = await api<{ job: { id: string } }>("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          client_name: form.client_name,
-          job_type: form.job_type,
-          deliverable: form.deliverable,
-          shoot_date: form.shoot_date || null,
-          script_notes: form.script_notes || null,
-          script_provided: form.script_provided,
+          client_name: form.client_name.trim(),
+          assignee_role: form.assignee_role,
+          reels_count: reels,
+          script_notes: form.script_notes.trim() || null,
+          script_provided: Boolean(form.script_notes.trim()),
+          due_date: form.due_date,
           route: form.route,
           agency_name: form.agency_name || null,
-          due_date: form.due_date || null,
+          job_type: "video",
         }),
       });
-
-      if (!form.script_provided) {
-        await fetch("/api/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ type: "order_created", jobId: job.id }),
-        });
-      }
-
       router.push(`/jobs/${job.id}`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to create job");
+      setError(err instanceof Error ? err.message : "Failed to create task");
       setLoading(false);
     }
   }
 
   return (
     <div className="max-w-2xl mx-auto px-4 pb-24 md:pb-8 pt-6">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => router.back()} className="text-[#666] text-sm">← Back</button>
-        <h1 className="text-xl font-semibold">New Job</h1>
+      <div className="flex items-center gap-3 mb-5">
+        <button type="button" onClick={() => router.back()} className="text-[#666] text-sm">←</button>
+        <h1 className="text-xl font-semibold">New task</h1>
       </div>
 
       <form onSubmit={submit} className="space-y-5">
-        <Field label="Client / Brand name *">
-          <input required value={form.client_name} onChange={(e) => set("client_name", e.target.value)}
-            placeholder="e.g. Rami Wedding, Pepsi Iraq"
-            className="input-field" />
-        </Field>
+        {/* Assign — big tap targets */}
+        <div>
+          <p className="text-xs text-[#888] uppercase tracking-wide mb-2">Assign to</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(["editor", "designer"] as const).map((role) => (
+              <button
+                key={role}
+                type="button"
+                onClick={() => set("assignee_role", role)}
+                className={`py-3.5 rounded-xl text-sm font-semibold border capitalize ${
+                  form.assignee_role === role
+                    ? "bg-[#e8c84a] text-black border-[#e8c84a]"
+                    : "bg-[#141414] text-[#aaa] border-[#2a2a2a]"
+                }`}
+              >
+                {role}
+              </button>
+            ))}
+          </div>
+        </div>
 
-        <Field label="Job type *">
-          <select value={form.job_type} onChange={(e) => set("job_type", e.target.value)} className="input-field">
-            <option value="video">Video</option>
-            <option value="photoshoot">Photoshoot</option>
-            <option value="mixed">Mixed (photo + video)</option>
-          </select>
-        </Field>
+        <div>
+          <label className="block text-xs text-[#888] uppercase tracking-wide mb-1.5">Brand *</label>
+          <input
+            required
+            autoFocus
+            value={form.client_name}
+            onChange={(e) => set("client_name", e.target.value)}
+            placeholder="Brand / client name"
+            className="w-full bg-[#141414] border border-[#2a2a2a] rounded-xl px-4 py-3.5 text-white text-base focus:outline-none focus:border-[#e8c84a]"
+          />
+        </div>
 
-        <Field label="Deliverable — what does the editor produce? *">
-          <input required value={form.deliverable} onChange={(e) => set("deliverable", e.target.value)}
-            placeholder="e.g. 3 Reels + 10 photos"
-            className="input-field" />
-        </Field>
-
-        <Field label="Shoot date">
-          <input type="date" value={form.shoot_date} onChange={(e) => set("shoot_date", e.target.value)}
-            className="input-field" />
-        </Field>
-
-        <Field label="Due date">
-          <input type="date" value={form.due_date} onChange={(e) => set("due_date", e.target.value)}
-            className="input-field" />
-        </Field>
-
-        <Field label="Script / talking points">
-          <textarea value={form.script_notes} onChange={(e) => set("script_notes", e.target.value)}
-            rows={3} placeholder="Paste script here, or leave blank and provide later"
-            className="input-field resize-none" />
-          <label className="flex items-center gap-2 mt-2 text-sm text-[#aaa] cursor-pointer">
-            <input type="checkbox" checked={form.script_provided}
-              onChange={(e) => set("script_provided", e.target.checked)}
-              className="w-4 h-4 accent-[#e8c84a]" />
-            Script is complete and provided
-          </label>
-        </Field>
-
-        <Field label="Send final to *">
-          <select value={form.route} onChange={(e) => set("route", e.target.value)} className="input-field">
-            <option value="hussein">Hussein (direct client)</option>
-            <option value="agency">Partner agency</option>
-          </select>
-        </Field>
-
-        {form.route === "agency" && (
-          <Field label="Agency name">
-            <input value={form.agency_name} onChange={(e) => set("agency_name", e.target.value)}
-              placeholder="Agency name"
-              className="input-field" />
-          </Field>
+        {form.assignee_role === "editor" && (
+          <div>
+            <p className="text-xs text-[#888] uppercase tracking-wide mb-2">How many reels?</p>
+            <div className="flex gap-2">
+              {["1", "2", "3", "4", "5", "6"].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => set("reels_count", n)}
+                  className={`flex-1 py-3 rounded-xl text-sm font-semibold border ${
+                    form.reels_count === n
+                      ? "bg-[#e8c84a] text-black border-[#e8c84a]"
+                      : "bg-[#141414] text-[#aaa] border-[#2a2a2a]"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
+
+        <div>
+          <label className="block text-xs text-[#888] uppercase tracking-wide mb-1.5">
+            Script {form.assignee_role === "editor" ? "(paste now or later)" : "(optional)"}
+          </label>
+          <textarea
+            value={form.script_notes}
+            onChange={(e) => set("script_notes", e.target.value)}
+            rows={4}
+            placeholder="Paste script / talking points here"
+            className="w-full bg-[#141414] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white text-sm resize-none focus:outline-none focus:border-[#e8c84a]"
+          />
+        </div>
+
+        <QuickDate value={form.due_date} onChange={(v) => set("due_date", v)} label="Due date *" />
+
+        <div>
+          <p className="text-xs text-[#888] uppercase tracking-wide mb-2">Send final to</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => set("route", "hussein")}
+              className={`py-3 rounded-xl text-sm font-medium border ${form.route === "hussein" ? "bg-[#e8c84a] text-black border-[#e8c84a]" : "bg-[#141414] text-[#aaa] border-[#2a2a2a]"}`}>
+              Hussein
+            </button>
+            <button type="button" onClick={() => set("route", "agency")}
+              className={`py-3 rounded-xl text-sm font-medium border ${form.route === "agency" ? "bg-[#e8c84a] text-black border-[#e8c84a]" : "bg-[#141414] text-[#aaa] border-[#2a2a2a]"}`}>
+              Agency
+            </button>
+          </div>
+          {form.route === "agency" && (
+            <input
+              value={form.agency_name}
+              onChange={(e) => set("agency_name", e.target.value)}
+              placeholder="Agency name"
+              className="mt-2 w-full bg-[#141414] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-[#e8c84a]"
+            />
+          )}
+        </div>
 
         {error && <p className="text-red-400 text-sm">{error}</p>}
 
-        <button type="submit" disabled={loading}
-          className="w-full bg-[#e8c84a] text-black font-semibold py-3.5 rounded-xl text-sm disabled:opacity-50">
-          {loading ? "Creating…" : "Create Job"}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-[#e8c84a] text-black font-semibold py-4 rounded-xl text-base disabled:opacity-50"
+        >
+          {loading ? "Creating…" : "Create task"}
         </button>
       </form>
 
       <NavBar />
-
-      <style jsx global>{`
-        .input-field {
-          width: 100%;
-          background: #141414;
-          border: 1px solid #2a2a2a;
-          border-radius: 10px;
-          padding: 12px 14px;
-          color: white;
-          font-size: 14px;
-          outline: none;
-          transition: border-color 0.15s;
-        }
-        .input-field:focus { border-color: #e8c84a; }
-        .input-field option { background: #141414; }
-      `}</style>
     </div>
   );
 }
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-xs text-[#888] uppercase tracking-wide mb-1.5">{label}</label>
-      {children}
-    </div>
-  );
-}
-

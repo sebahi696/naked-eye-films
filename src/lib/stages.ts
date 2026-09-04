@@ -1,14 +1,14 @@
-import type { Stage, UserRole, Job } from "./database.types";
+import type { Stage, UserRole, Job, AssigneeRole } from "./database.types";
 
 export const STAGE_LABELS: Record<Stage, string> = {
-  new_order: "New Order",
-  shoot_booked: "Shoot Booked",
+  new_order: "New",
+  shoot_booked: "Booked",
   shot: "Shot",
-  sd_received: "SD with Editor",
-  on_drive: "On Internal Drive",
-  waiting_script: "Waiting on Script",
+  sd_received: "SD received",
+  on_drive: "On drive",
+  waiting_script: "Need script",
   editing: "Editing",
-  review: "In Review",
+  review: "Review",
   sent: "Sent",
 };
 
@@ -24,33 +24,54 @@ export const STAGE_ORDER: Stage[] = [
   "sent",
 ];
 
-// Who can advance the job from each stage
+/** Short pipeline for editor-assigned edit tasks (no shoot/SD steps) */
+export const EDITOR_TASK_STAGES: Stage[] = [
+  "waiting_script",
+  "editing",
+  "review",
+  "sent",
+];
+
 export const STAGE_OWNER: Record<Stage, UserRole[]> = {
   new_order: ["owner", "admin"],
   shoot_booked: ["owner", "admin"],
   shot: ["owner"],
   sd_received: ["editor"],
   on_drive: ["editor"],
-  waiting_script: ["owner"], // only Hussein can unblock by providing script
-  editing: ["editor"],
+  waiting_script: ["owner", "admin"],
+  editing: ["editor", "designer"],
   review: ["owner", "admin"],
   sent: [],
 };
 
-// Label for the primary action button shown to the current user
 export const NEXT_ACTION_LABEL: Record<Stage, string> = {
   new_order: "Book Shoot",
   shoot_booked: "Mark Shot Done",
   shot: "SD Handed to Editor",
-  sd_received: "Files Copied to Drive",
-  on_drive: "Script Provided",
-  waiting_script: "Script Provided — Start Editing",
-  editing: "Send for Review",
-  review: "Mark Sent",
+  sd_received: "Files on Drive",
+  on_drive: "Need script",
+  waiting_script: "Script ready — start",
+  editing: "Send for review",
+  review: "Approve & mark sent",
   sent: "",
 };
 
-export function getNextStage(current: Stage): Stage | null {
+export function getNextStage(current: Stage, assignee?: AssigneeRole | null): Stage | null {
+  // Editor/designer edit tasks use a short path
+  if (assignee === "editor" || assignee === "designer") {
+    if (current === "new_order") return "waiting_script";
+    const path = EDITOR_TASK_STAGES;
+    const idx = path.indexOf(current);
+    if (idx === -1) {
+      // Mid shoot-pipeline job assigned later — fall through to full path
+      const fullIdx = STAGE_ORDER.indexOf(current);
+      if (fullIdx === -1 || fullIdx === STAGE_ORDER.length - 1) return null;
+      return STAGE_ORDER[fullIdx + 1];
+    }
+    if (idx === path.length - 1) return null;
+    return path[idx + 1];
+  }
+
   const idx = STAGE_ORDER.indexOf(current);
   if (idx === -1 || idx === STAGE_ORDER.length - 1) return null;
   return STAGE_ORDER[idx + 1];
@@ -61,27 +82,15 @@ export interface GateCheck {
   reason?: string;
 }
 
-/**
- * Returns whether advancing FROM the given stage is blocked, and why.
- */
 export function checkGate(job: Job, from: Stage): GateCheck {
   if (from === "on_drive" && !job.script_provided && !job.script_notes) {
-    return {
-      blocked: true,
-      reason: "Script must be provided before editing can begin.",
-    };
+    return { blocked: true, reason: "Script needed before editing." };
   }
-  if (from === "waiting_script" && !job.script_provided) {
-    return {
-      blocked: true,
-      reason: "Script not yet provided by Hussein.",
-    };
+  if (from === "waiting_script" && !job.script_provided && !job.script_notes) {
+    return { blocked: true, reason: "Add the script first (or mark it provided)." };
   }
   if (from === "sd_received" && !job.studio_folder) {
-    return {
-      blocked: true,
-      reason: "Enter the studio drive folder name before marking files copied.",
-    };
+    return { blocked: true, reason: "Enter studio folder name first." };
   }
   return { blocked: false };
 }
@@ -90,20 +99,28 @@ export function canAdvance(job: Job, userRole: UserRole): boolean {
   return STAGE_OWNER[job.stage]?.includes(userRole) ?? false;
 }
 
-/** Jobs waiting on Hussein (owner) */
 export function isWaitingOnHussein(job: Job): boolean {
-  return (
-    job.stage === "waiting_script" ||
-    job.stage === "new_order" ||
-    job.stage === "review"
-  );
+  return job.stage === "waiting_script" || job.stage === "new_order" || job.stage === "review";
 }
 
-/** Jobs waiting on editor */
 export function isWaitingOnEditor(job: Job): boolean {
+  const assignee = job.assignee_role ?? "editor";
+  if (assignee !== "editor") return false;
   return (
     job.stage === "sd_received" ||
     job.stage === "on_drive" ||
-    job.stage === "editing"
+    job.stage === "editing" ||
+    (job.stage === "waiting_script" && Boolean(job.script_provided || job.script_notes))
   );
+}
+
+export function isWaitingOnDesigner(job: Job): boolean {
+  return (job.assignee_role ?? "editor") === "designer" && job.stage === "editing";
+}
+
+export function initialStageForAssignee(assignee: AssigneeRole, hasScript: boolean): Stage {
+  if (assignee === "editor" || assignee === "designer") {
+    return hasScript ? "editing" : "waiting_script";
+  }
+  return "new_order";
 }
