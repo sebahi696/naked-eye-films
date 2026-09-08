@@ -78,6 +78,9 @@ export interface Ping {
   to_role: string;
   kind: PingKind;
   message: string;
+  brand: string | null;
+  reply: string | null;
+  replied_at: string | null;
   read_at: string | null;
   created_at: string;
 }

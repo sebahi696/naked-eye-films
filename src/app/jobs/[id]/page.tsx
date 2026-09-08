@@ -15,6 +15,7 @@ import StageBadge from "@/components/StageBadge";
 import EventLog from "@/components/EventLog";
 import NavBar from "@/components/NavBar";
 import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/client-api";
 
 export default function JobCardPage() {
@@ -25,7 +26,6 @@ export default function JobCardPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [note, setNote] = useState("");
   const [folderEdit, setFolderEdit] = useState("");
-  const [pingText, setPingText] = useState("");
   const [advancing, setAdvancing] = useState(false);
   const [pinging, setPinging] = useState(false);
   const [error, setError] = useState("");
@@ -101,11 +101,11 @@ export default function JobCardPage() {
         body: JSON.stringify({
           job_id: job.id,
           kind,
-          message: message || pingText || defaultPing(kind, job.client_name),
+          brand: job.client_name,
+          message: message || defaultPing(kind, job.client_name),
         }),
       });
-      setPingText("");
-      setPingOk("Sent to Hussein");
+      setPingOk("Sent to his Inbox");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ping failed");
     }
@@ -209,37 +209,27 @@ export default function JobCardPage() {
         </div>
       )}
 
-      {/* Team → Hussein pings */}
-      {isTeam && (
-        <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
-          <p className="text-xs text-[#666] uppercase tracking-wide mb-3">Ping Hussein</p>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <button type="button" disabled={pinging} onClick={() => sendPing("need_script")}
-              className="py-3 rounded-xl text-xs font-medium border border-[#2e1a0a] text-[#e8903a]">
-              Need script
-            </button>
-            <button type="button" disabled={pinging} onClick={() => sendPing("done")}
-              className="py-3 rounded-xl text-xs font-medium border border-[#1a2e1a] text-[#5bbf6b]">
-              Work done
-            </button>
-            <button type="button" disabled={pinging} onClick={() => sendPing("reminder")}
-              className="py-3 rounded-xl text-xs font-medium border border-[#2a2a2a] text-[#aaa]">
-              Reminder
-            </button>
-            <button type="button" disabled={pinging || !pingText.trim()} onClick={() => sendPing("question", pingText.trim())}
-              className="py-3 rounded-xl text-xs font-medium border border-[#2a2a2a] text-[#7b8ec8] disabled:opacity-40">
-              Ask question
-            </button>
-          </div>
-          <input
-            value={pingText}
-            onChange={(e) => setPingText(e.target.value)}
-            placeholder="Quick question for Hussein…"
-            className="w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#e8c84a]"
-          />
-          {pingOk && <p className="text-[#5bbf6b] text-xs mt-2">{pingOk}</p>}
-        </div>
-      )}
+          {/* Team → Hussein — prefer Ask for questions; keep done on task */}
+          {isTeam && (
+            <div className="bg-[#141414] border border-[#2a2a2a] rounded-xl p-4 mb-3">
+              <p className="text-xs text-[#666] uppercase tracking-wide mb-2">Blocked?</p>
+              <Link
+                href="/ask"
+                className="block w-full text-center bg-[#e8c84a] text-black font-semibold py-3 rounded-xl text-sm mb-2"
+              >
+                Ask Hussein (Inbox)
+              </Link>
+              <button
+                type="button"
+                disabled={pinging}
+                onClick={() => sendPing("done")}
+                className="w-full py-3 rounded-xl text-xs font-medium border border-[#1a2e1a] text-[#5bbf6b]"
+              >
+                {pinging ? "…" : "Mark work done for him"}
+              </button>
+              {pingOk && <p className="text-[#5bbf6b] text-xs mt-2">{pingOk}</p>}
+            </div>
+          )}
 
       {job.stage === "sent" && (
         <div className="bg-[#1a2e1a] border border-[#2a4a2a] rounded-xl p-4 mb-3 text-center">

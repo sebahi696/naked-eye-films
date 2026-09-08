@@ -6,14 +6,17 @@ export async function GET(req: NextRequest) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const unreadOnly = req.nextUrl.searchParams.get("unread") === "1";
-  let query = db().from("pings").select("*").order("created_at", { ascending: false }).limit(50);
+  const mode = req.nextUrl.searchParams.get("mode"); // open | mine | all
+  let query = db().from("pings").select("*").order("created_at", { ascending: false }).limit(40);
+
   if (user.role === "owner" || user.is_admin) {
     query = query.eq("to_role", "owner");
+    if (mode === "open") {
+      query = query.is("replied_at", null).neq("kind", "done");
+    }
   } else {
     query = query.eq("from_user_id", user.id);
   }
-  if (unreadOnly) query = query.is("read_at", null);
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -24,9 +27,9 @@ export async function POST(req: NextRequest) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { job_id, kind, message } = await req.json();
+  const { job_id, kind, message, brand } = await req.json();
   if (!kind || !message) {
-    return NextResponse.json({ error: "Kind and message required" }, { status: 400 });
+    return NextResponse.json({ error: "Question text required" }, { status: 400 });
   }
 
   const { data, error } = await db()
@@ -37,25 +40,27 @@ export async function POST(req: NextRequest) {
       from_name: user.full_name,
       to_role: "owner",
       kind,
-      message,
+      message: String(message).trim(),
+      brand: brand ? String(brand).trim() : null,
     })
     .select()
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  // Best-effort WhatsApp if configured
   try {
     await fetch(new URL("/api/notify", req.url).toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json", cookie: req.headers.get("cookie") ?? "" },
       body: JSON.stringify({
         type: "team_ping",
-        message: `${user.full_name}: ${message}`,
+        message: brand
+          ? `${user.full_name} (${brand}): ${message}`
+          : `${user.full_name}: ${message}`,
       }),
     });
   } catch {
-    // ignore
+    // optional WhatsApp
   }
 
   return NextResponse.json({ ping: data });
@@ -68,12 +73,40 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { id, mark_all } = await req.json();
-  if (mark_all) {
-    await db().from("pings").update({ read_at: new Date().toISOString() }).eq("to_role", "owner").is("read_at", null);
+  const body = await req.json();
+  const now = new Date().toISOString();
+
+  // Hussein answers a question in one tap / short reply
+  if (body.id && (body.reply != null || body.action === "ack")) {
+    const reply =
+      body.action === "ack"
+        ? body.reply || "Got it — noted."
+        : String(body.reply).trim();
+    if (!reply) return NextResponse.json({ error: "Reply required" }, { status: 400 });
+
+    const { data, error } = await db()
+      .from("pings")
+      .update({ reply, replied_at: now, read_at: now })
+      .eq("id", body.id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ping: data });
+  }
+
+  if (body.mark_all) {
+    await db()
+      .from("pings")
+      .update({ read_at: now, replied_at: now, reply: "Seen" })
+      .eq("to_role", "owner")
+      .is("replied_at", null);
     return NextResponse.json({ ok: true });
   }
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-  await db().from("pings").update({ read_at: new Date().toISOString() }).eq("id", id);
-  return NextResponse.json({ ok: true });
+
+  if (body.id) {
+    await db().from("pings").update({ read_at: now }).eq("id", body.id);
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
 }
