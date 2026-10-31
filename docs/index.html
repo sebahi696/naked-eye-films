@@ -195,6 +195,7 @@ input[type=date].btn{font-weight:500;min-height:40px}
 a.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
 .tel{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
 .search{margin-bottom:10px}.search input{min-height:44px;border-radius:12px;background:var(--surface)}
+.login{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px 16px}.login-box{width:100%;max-width:380px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 22px}
 .install{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:7;background:var(--fg);color:var(--bg);padding:8px 10px 8px 14px;border-radius:14px;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;max-width:calc(100% - 32px);box-shadow:0 8px 24px rgba(0,0,0,.3)}.install .x{background:transparent;color:inherit}
 .field[data-locked]{opacity:.45}.field[data-locked] input{pointer-events:none;background:var(--surface2)}
 .custompay{background:var(--surface2);padding:10px 12px;border-radius:10px}
@@ -229,7 +230,20 @@ body.locked{overflow:hidden}
 </head>
 <body>
 
-<div id="app">
+<div id="login" class="login" hidden>
+  <div class="login-box">
+    <div class="brand" style="justify-content:center;font-size:22px;margin-bottom:6px"><span class="eye"><i></i></span>Naked Eye Films</div>
+    <div style="text-align:center;color:var(--muted);font-size:13.5px;margin-bottom:22px">Clients, shoots, payments and jobs — in one place.</div>
+    <form id="loginForm">
+      <div class="field"><label>Email</label><input id="lEmail" type="email" autocomplete="username" inputmode="email" required placeholder="you@nakedeyefilms.co"></div>
+      <div class="field"><label>Password</label><input id="lPass" type="password" autocomplete="current-password" required></div>
+      <div id="loginErr" class="note" style="color:var(--bad);background:var(--bad-bg)" hidden></div>
+      <div class="btns"><button class="btn primary full" id="loginBtn" type="submit">Sign in</button></div>
+    </form>
+    <div class="note" style="text-align:center">You stay signed in on this phone. Ask Hussein for your login.</div>
+  </div>
+</div>
+<div id="app" hidden>
   <header class="top">
     <div class="brand"><span class="eye"><i></i></span>Naked Eye Films</div>
     <button class="role" id="roleBtn" title="Switch role">Owner ▾</button>
@@ -246,6 +260,7 @@ body.locked{overflow:hidden}
 <div id="sheetRoot"></div>
 <div id="toastRoot"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
 // ---------- Sample data (examples, not real clients) ----------
 const PACKAGES = {
@@ -267,8 +282,7 @@ const fmtD = d => new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'s
 const money = n => '$' + (n||0).toLocaleString();
 const daysFrom = d => Math.round((new Date(d) - TODAY)/86400000);
 
-let state = {
-  role:'owner',
+const SEED = {
   clients:[
     // pipeline
     {id:1,name:'Beirut Bites',contact:'Rami K.',phone:'+961 70 123 456',type:'lead',stage:0,created:'2026-10-12',followUp:plusDays(TODAY_ISO,1),notes:'Restaurant in Mar Mikhael, found us on Instagram.',pkg:null,log:[['2026-10-12','Added as new lead']]},
@@ -301,7 +315,9 @@ let state = {
     {ic:'📞',k:'warn',t:'Follow up on proposal',m:'Atlas Gym · sent 8 days ago, follow-up was due 11 Oct',cid:3,read:false},
     {ic:'✅',k:'good',t:'Jad finished: 4 reels — October',m:'Marwan Dental · 6 Oct',cid:6,read:true},
     {ic:'🎬',k:'info',t:'Shoot in 5 days',m:'Saffron Street Food · 18 Oct, 10:00 AM',cid:7,read:true},
-  ],
+  ]
+};
+let state = { role:null, me:null, team:[], clients:[], expenses:[], notifs:[], loaded:false,
   screen:'home', leadTab:'all', activeTab:'all', teamTab:'all'
 };
 
@@ -535,12 +551,12 @@ function filesCard(c, canEdit){
 }
 function sendToEditSheet(cid){
   const c=byId(cid); const d=c.brief?.deliverables||'';
-  openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">${c.name}</div><h2>Send to editing</h2><div style="font-size:13px;color:var(--muted)">Creates Jad's job and notifies him.</div></div><button class="x" data-closeform>×</button></div>
+  openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">${c.name}</div><h2>Send to editing</h2><div style="font-size:13px;color:var(--muted)">Creates the editor's job and notifies ${nameFor('editor')}.</div></div><button class="x" data-closeform>×</button></div>
   <form id="editForm" data-cid="${c.id}">
-    <div class="field"><label>Job for Jad</label><input id="e_title" type="text" required value="Edit ${d||'this month\'s content'}"></div>
+    <div class="field"><label>Job for ${nameFor('editor')}</label><input id="e_title" type="text" required value="Edit ${d||'this month\'s content'}"></div>
     <div class="field"><label>Raw footage link</label><input id="e_raw" type="url" inputmode="url" placeholder="https://drive.google.com/…" value="${c.driveRaw||''}"></div>
-    <div class="field"><label>Notes for Jad <span class="opt">style, references, deadline</span></label><textarea id="e_notes" rows="4" placeholder="e.g. Fast cuts, warm grade, logo at the end. First 4 reels by 17 Oct.">${c.teamNotes||''}</textarea></div>
-    <div class="btns"><button class="btn primary full" type="submit">Send to Jad</button></div>
+    <div class="field"><label>Notes for ${nameFor('editor')} <span class="opt">style, references, deadline</span></label><textarea id="e_notes" rows="4" placeholder="e.g. Fast cuts, warm grade, logo at the end. First 4 reels by 17 Oct.">${c.teamNotes||''}</textarea></div>
+    <div class="btns"><button class="btn primary full" type="submit">Send to ${nameFor('editor')}</button></div>
   </form>`,{form:true});
 }
 function teamClientSheet(cid){
@@ -576,7 +592,6 @@ const initials = n => n.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase(
 const unread = () => state.notifs.filter(n=>!n.read).length;
 
 function toast(msg){ const t=document.createElement('div'); t.className='toast'; t.textContent=msg; $('#toastRoot').replaceChildren(t); setTimeout(()=>t.remove(),2200); }
-function notify(ic,k,t,m,cid){ state.notifs.unshift({ic,k,t,m,cid,read:false}); toast('🔔 '+t); render(); }
 
 // ---------- Rendering ----------
 const NAV = [
@@ -588,7 +603,7 @@ const NAV = [
 ];
 function render(){
   $('#bellCount').textContent = unread(); $('#bellCount').hidden = unread()===0;
-  $('#roleBtn').textContent = ({owner:'Owner',editor:'Jad · Editor',social:'Lina · Social media'})[state.role]+' ▾';
+  $('#roleBtn').textContent = (state.me?.name||'')+' · '+({owner:'Owner',editor:'Editor',social:'Social media'})[state.role]+' ▾';
   $('#fab').hidden = state.role!=='owner';
   const navItems = state.role==='owner' ? NAV : NAV.filter(n=>n[0]==='team'||n[0]==='home');
   if(!navItems.find(n=>n[0]===state.screen)) state.screen = navItems[0][0];
@@ -694,14 +709,15 @@ function moneyScreen(){
 }
 
 const myKind = () => state.role==='editor'?'edit': state.role==='social'?'post': null;
-const roleName = () => ({editor:'Jad',social:'Lina'})[state.role]||'Owner';
+const nameFor = r => (state.team.find(t=>t.role===r)||{}).name || ({editor:'Editor',social:'Social media',owner:'Owner'})[r];
+const roleName = () => state.me?.name || nameFor(state.role);
 function allJobs(){ return state.clients.filter(c=>c.type==='active').flatMap(c=>(c.jobs||[]).map(j=>({...j,client:c}))); }
 function team(){
   const jobs = allJobs(); const k=myKind();
   const mine = k? jobs.filter(j=>j.kind===k) : jobs;
   const list = state.teamTab==='all'?mine: state.teamTab==='open'? mine.filter(j=>!j.done): mine.filter(j=>j.done);
   return `
-  <div class="eyebrow">${state.role==='owner'?'Jad (editor) · Lina (social media)':'Your jobs'}</div>
+  <div class="eyebrow">${state.role==='owner'?nameFor('editor')+' (editor) · '+nameFor('social')+' (social media)':'Your jobs'}</div>
   <h1 class="h1">Jobs</h1>
   <div class="tabs">${[['all','All'],['open','Open'],['done','Done']].map(([kk,l])=>`<button class="tab ${state.teamTab===kk?'on':''}" data-teamtab="${kk}">${l}<b>${kk==='all'?mine.length:kk==='open'?mine.filter(j=>!j.done).length:mine.filter(j=>j.done).length}</b></button>`).join('')}</div>
   <div class="list">${list.map(jobRow).join('')||'<div class="empty">No jobs</div>'}</div>
@@ -739,8 +755,57 @@ function askDiscard(sheet){
 const payText = c => c.payText || payLabel(c.payPlan);
 const addMonth = d => { const n=new Date(d); const day=n.getDate(); n.setMonth(n.getMonth()+1); if(n.getDate()!==day) n.setDate(0); return isoD(n); };
 const depositPct = c => isNaN(+c.payPlan) ? 0 : +c.payPlan;
-function persist(){ try{ const {_jobClient,_timer,...s}=state; localStorage.setItem('nef-crm-v1', JSON.stringify(s)); }catch(_){} }
-function restore(){ try{ const s=JSON.parse(localStorage.getItem('nef-crm-v1')||'null'); if(s && s.clients) Object.assign(state, s); }catch(_){} state.clients.forEach(c=>{ if(c.drive && !c.driveRaw) c.driveRaw=c.drive; }); }
+// ---------- Shared database (Supabase) ----------
+const SB_URL='https://hicwqzsrkvoyihshfccx.supabase.co', SB_KEY='sb_publishable_x-M-_XxXlX9b2L_TkItWcA_pALXUzz5';
+const sb = window.supabase.createClient(SB_URL, SB_KEY);
+let snap = {clients:{}, expenses:{}}; let saving=false, dirty=false;
+const readIds = (()=>{ try{ return new Set(JSON.parse(localStorage.getItem('nef-read')||'[]')); }catch(_){ return new Set(); } })();
+function persist(){ dirty=true; if(!saving) flush(); try{ localStorage.setItem('nef-ui', JSON.stringify({screen:state.screen})); localStorage.setItem('nef-read', JSON.stringify([...readIds].slice(-300))); }catch(_){} }
+async function flush(){
+  if(!state.loaded || !state.me) return; saving=true; dirty=false;
+  try{
+    const ups=[], dels=[];
+    const seen=new Set();
+    for(const c of state.clients){ const id=String(c.id); seen.add(id); const j=JSON.stringify(c); if(snap.clients[id]!==j){ ups.push({id, data:c, updated_at:new Date().toISOString(), updated_by:state.me.user_id}); snap.clients[id]=j; } }
+    for(const id in snap.clients) if(!seen.has(id)){ dels.push(id); delete snap.clients[id]; }
+    if(ups.length){
+      if(state.role==='owner'){ const {error}=await sb.from('crm_clients').upsert(ups); if(error) throw error; }
+      else { for(const u of ups){ const {error}=await sb.from('crm_clients').update({data:u.data,updated_at:u.updated_at,updated_by:u.updated_by}).eq('id',u.id); if(error) throw error; } }
+    }
+    if(dels.length && state.role==='owner'){ const {error}=await sb.from('crm_clients').delete().in('id',dels); if(error) throw error; }
+    if(state.role==='owner'){
+      const eu=[], seenE=new Set();
+      for(const e of state.expenses){ if(!e.id) e.id='e'+Date.now()+Math.random().toString(36).slice(2,6); seenE.add(e.id); const j=JSON.stringify(e); if(snap.expenses[e.id]!==j){ eu.push({id:e.id,data:e}); snap.expenses[e.id]=j; } }
+      const ed=Object.keys(snap.expenses).filter(id=>!seenE.has(id)); ed.forEach(id=>delete snap.expenses[id]);
+      if(eu.length){ const {error}=await sb.from('crm_expenses').upsert(eu); if(error) throw error; }
+      if(ed.length){ const {error}=await sb.from('crm_expenses').delete().in('id',ed); if(error) throw error; }
+    }
+  }catch(err){ console.error(err); toast('Could not save — check connection'); }
+  saving=false; if(dirty) flush();
+}
+async function loadAll(){
+  const [c,e,n,t]=await Promise.all([sb.from('crm_clients').select('id,data').order('updated_at'), sb.from('crm_expenses').select('id,data'), sb.from('crm_notifs').select('id,data,for_role,created_at').order('id',{ascending:false}).limit(60), sb.from('crm_profiles').select('user_id,name,role')]);
+  if(c.error||e.error||n.error||t.error){ toast('Could not load data'); console.error(c.error||e.error||n.error||t.error); return; }
+  state.team=t.data||[];
+  state.clients=(c.data||[]).map(r=>{ const d=r.data; d.id=isNaN(+r.id)?r.id:+r.id; return d; });
+  state.expenses=(e.data||[]).map(r=>({...r.data,id:r.id}));
+  state.notifs=(n.data||[]).filter(r=>r.for_role==='all'||r.for_role===state.role).map(r=>({...r.data,id:r.id,read:readIds.has(r.id)}));
+  snap={clients:{},expenses:{}}; state.clients.forEach(x=>snap.clients[String(x.id)]=JSON.stringify(x)); state.expenses.forEach(x=>snap.expenses[x.id]=JSON.stringify(x));
+  state.loaded=true;
+}
+let rt=null, reloadT=null;
+function subscribe(){
+  if(rt) return;
+  rt=sb.channel('crm').on('postgres_changes',{event:'*',schema:'public',table:'crm_clients'},()=>queueReload()).on('postgres_changes',{event:'*',schema:'public',table:'crm_expenses'},()=>queueReload()).on('postgres_changes',{event:'INSERT',schema:'public',table:'crm_notifs'},()=>queueReload(true)).subscribe();
+  setInterval(()=>{ if(!saving && !dirty) queueReload(); }, 30000);
+}
+function queueReload(isNotif){ clearTimeout(reloadT); reloadT=setTimeout(async()=>{ if(saving||dirty) return; const before=state.notifs[0]?.id; await loadAll(); render(); const first=state.notifs[0]; if(isNotif && first && first.id!==before && !first.read) toast('🔔 '+first.t); }, 400); }
+async function notify(ic,k,t,m,cid,forRole){
+  const row={ic,k,t,m,cid}; const fr=forRole|| (state.role==='owner' ? 'all' : 'owner');
+  state.notifs.unshift({...row,read:false}); toast('🔔 '+t); render();
+  const {error}=await sb.from('crm_notifs').insert({data:row,for_role:fr}); if(error) console.error(error);
+}
+function restore(){ try{ const u=JSON.parse(localStorage.getItem('nef-ui')||'null'); if(u&&u.screen) state.screen=u.screen; }catch(_){} }
 
 function clientSheet(id){
   const c=byId(id); if(!c) return;
@@ -812,7 +877,7 @@ function addJobSheet(cid){
   openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">${c.name}</div><h2>Add job</h2></div><button class="x" data-closeform>×</button></div>
   <form id="jobForm">
     <div class="field"><label>Job</label><input id="j_title" required placeholder="e.g. Reel 4 — gift set"></div>
-    <div class="field"><label>Assign to</label><div class="seg" id="jobSeg"><button type="button" data-who="Jad" data-kind="edit" class="on">Jad · Editor</button><button type="button" data-who="Lina" data-kind="post">Lina · Social media</button></div></div>
+    <div class="field"><label>Assign to</label><div class="seg" id="jobSeg"><button type="button" data-who="${nameFor('editor')}" data-kind="edit" class="on">${nameFor('editor')} · Editor</button><button type="button" data-who="${nameFor('social')}" data-kind="post">${nameFor('social')} · Social media</button></div></div>
     <div class="btns"><button class="btn primary full" type="submit">Assign & notify</button></div>
   </form>`,{form:true});
 }
@@ -829,10 +894,12 @@ function feedbackSheet(){
   <div class="btns"><button class="btn primary full" type="submit">${FEEDBACK_PHONE?'Send on WhatsApp':'Copy feedback'}</button></div></form>`,{form:true});
 }
 function roleSheet(){
-  openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">Access</div><h2>Who is using the app?</h2></div><button class="x" data-close>×</button></div>
-  <div class="list">${[['owner','Owner','Everything: pipeline, clients, money, team'],['editor','Jad · Editor','Sees only editing jobs · Drive link · marks edits ready'],['social','Lina · Social media','Sees only posting/design jobs · Drive link · marks posted']].map(([k,t,m])=>`<button class="row" data-role="${k}"><div class="av">${initials(t)}</div><div class="body"><div class="t">${t}</div><div class="m">${m}</div></div><div class="r">${state.role===k?'<span class="pill good">now</span>':''}</div></button>`).join('')}</div>
+  const owner=state.role==='owner';
+  openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">Signed in</div><h2>${state.me?.name||''}</h2><div style="font-size:13px;color:var(--muted)">${({owner:'Owner · everything',editor:'Editor · editing jobs only',social:'Social media · posting jobs only'})[state.role]} · ${sbUser?.email||''}</div></div><button class="x" data-close>×</button></div>
+  <div class="card"><h3>Team</h3>${state.team.map(t=>`<div class="check"><span class="av" style="width:30px;height:30px;border-radius:8px;background:var(--surface2);display:grid;place-items:center;font-size:11px;font-weight:700">${initials(t.name)}</span><span>${t.name}</span><span class="who">${({owner:'Owner',editor:'Editor',social:'Social media'})[t.role]}</span></div>`).join('')}</div>
   <div class="btns" style="margin-top:16px"><button class="btn primary full" data-feedback>💬 Send feedback about the app</button></div>
-  <div class="btns"><button class="btn ghost sm" data-reset>Reset demo data</button></div><div class="note">The prototype keeps your changes on this phone until you reset.</div>`);
+  ${owner?`<div class="btns"><button class="btn sm" data-seed>Load demo clients</button><button class="btn ghost sm" data-reset>Delete all data</button></div><div class="note">Everyone on the team sees the same data, live. "Load demo clients" adds example clients so you can test with something; "Delete all data" clears every client, expense and notification.</div>`:''}
+  <div class="btns"><button class="btn ghost full" data-signout>Sign out</button></div>`);
 }
 function expenseSheet(){
   openSheet(`<div class="sheet-head"><div style="flex:1"><h2>Add expense</h2></div><button class="x" data-closeform>×</button></div>
@@ -841,7 +908,7 @@ function expenseSheet(){
 
 // ---------- Events ----------
 document.addEventListener('click', e=>{
-  const t = e.target.closest('[data-go],[data-open],[data-close],[data-closeform],[data-keep],[data-discard],[data-reset],[data-leadtab],[data-activetab],[data-teamtab],[data-advance],[data-snooze],[data-cycle],[data-newmonth],[data-addjob],[data-pay-amt],[data-remind],[data-job],[data-role],[data-notif],[data-pay],[data-who],[data-addexp],[data-brief],[data-call],[data-prompt],[data-copy],[data-teamopen],[data-jobdone],[data-feedback],[data-reminder],[data-tpl],[data-wa],[data-jump],[data-chip],[data-dep],[data-addrow],[data-delrow],[data-segv],#fab,#bellBtn,#roleBtn');
+  const t = e.target.closest('[data-go],[data-open],[data-close],[data-closeform],[data-keep],[data-discard],[data-reset],[data-reset-yes],[data-seed],[data-signout],[data-leadtab],[data-activetab],[data-teamtab],[data-advance],[data-snooze],[data-cycle],[data-newmonth],[data-addjob],[data-pay-amt],[data-remind],[data-job],[data-role],[data-notif],[data-pay],[data-who],[data-addexp],[data-brief],[data-call],[data-prompt],[data-copy],[data-teamopen],[data-jobdone],[data-feedback],[data-reminder],[data-tpl],[data-wa],[data-jump],[data-chip],[data-dep],[data-addrow],[data-delrow],[data-segv],#fab,#bellBtn,#roleBtn');
   if(!t) return;
   if(t.dataset.jobdone){ e.stopPropagation(); jobDoneSheet(t.dataset.jobdone,+t.dataset.cid); return; }
   if(t.dataset.teamopen){ if(e.target.closest('a')) return; state.role==='owner'? clientSheet(+t.dataset.teamopen) : teamClientSheet(+t.dataset.teamopen); return; }
@@ -866,7 +933,10 @@ document.addEventListener('click', e=>{
   }
   if(t.dataset.keep!==undefined){ t.closest('.discard').remove(); return; }
   if(t.dataset.discard!==undefined){ closeSheet(); return; }
-  if(t.dataset.reset!==undefined){ try{localStorage.removeItem('nef-crm-v1');}catch(_){} location.reload(); return; }
+  if(t.dataset.signout!==undefined){ sb.auth.signOut().then(()=>location.reload()); return; }
+  if(t.dataset.seed!==undefined){ const seed=shiftSeed(SEED); const ids=new Set(state.clients.map(c=>String(c.id))); seed.clients.forEach(c=>{ if(!ids.has(String(c.id))) state.clients.push(c); }); seed.expenses.forEach(e=>{ if(!state.expenses.some(x=>x.t===e.t)) state.expenses.push(e); }); closeSheet(); render(); toast('Demo clients loaded'); return; }
+  if(t.dataset.reset!==undefined){ const sh=t.closest('.sheet'); if(!sh.querySelector('.discard')){ const bar=document.createElement('div'); bar.className='discard'; bar.innerHTML='<span>Delete every client, expense and notification for the whole team?</span><button class="btn sm" data-keep>Keep</button><button class="btn sm" style="color:var(--bad)" data-reset-yes>Yes, delete all</button>'; sh.insertBefore(bar, sh.children[1]); } return; }
+  if(t.dataset.resetYes!==undefined){ state.clients=[]; state.expenses=[]; state.notifs=[]; sb.from('crm_notifs').delete().gte('id',0).then(()=>{}); closeSheet(); render(); toast('All data deleted'); return; }
   if(t.dataset.brief){ briefSheet(+t.dataset.brief, false); return; }
   if(t.dataset.call){ const c=byId(+t.dataset.call); if(!c.log.some(l=>l[1].startsWith('Discovery call started'))) c.log.unshift([TODAY_ISO,'Discovery call started']); briefSheet(c.id, true); return; }
   if(t.dataset.prompt){ promptSheet(+t.dataset.prompt); return; }
@@ -884,8 +954,8 @@ document.addEventListener('click', e=>{
   if(t.dataset.addexp!==undefined) return expenseSheet();
   if(t.dataset.pay){ t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); return; }
   if(t.dataset.who){ t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); return; }
-  if(t.dataset.role){ state.role=t.dataset.role; state.screen='home'; closeSheet(); render(); toast('Switched to '+t.querySelector('.t').textContent); return; }
-  if(t.dataset.notif){ const n=state.notifs[+t.dataset.notif]; n.read=true; render(); if(n.cid) clientSheet(n.cid); else closeSheet(); return; }
+  
+  if(t.dataset.notif){ const n=state.notifs[+t.dataset.notif]; n.read=true; if(n.id) readIds.add(n.id); render(); if(n.cid) clientSheet(n.cid); else closeSheet(); return; }
 
   if(t.dataset.advance){
     const c=byId(+t.dataset.advance);
@@ -923,8 +993,8 @@ document.addEventListener('submit', e=>{
   }
   if(e.target.id==='editForm'){
     const c=byId(+e.target.dataset.cid); c.cycle=2; c.driveRaw=$('#e_raw').value.trim()||c.driveRaw; c.teamNotes=$('#e_notes').value.trim();
-    const j={id:'j'+Date.now(),title:$('#e_title').value.trim(),kind:'edit',who:'Jad',done:false}; (c.jobs=c.jobs||[]).push(j);
-    c.log.unshift([TODAY_ISO,'Sent to editing · job for Jad: '+j.title]); closeSheet(); render(); notify('✂️','info','New editing job for Jad',c.name+' · '+j.title,c.id); clientSheet(c.id);
+    const j={id:'j'+Date.now(),title:$('#e_title').value.trim(),kind:'edit',who:nameFor('editor'),done:false}; (c.jobs=c.jobs||[]).push(j);
+    c.log.unshift([TODAY_ISO,'Sent to editing · job for Jad: '+j.title]); closeSheet(); render(); notify('✂️','info','New editing job for '+nameFor('editor'),c.name+' · '+j.title,c.id,'editor'); clientSheet(c.id);
   }
   if(e.target.id==='fbForm'){
     const msg='NEF app feedback · '+$('#fb_where').value+' · '+roleName()+'\n'+$('#fb_txt').value.trim();
@@ -936,13 +1006,13 @@ document.addEventListener('submit', e=>{
     const lbl=j.kind==='edit'?'Edits ready':'Posted'; c.log.unshift([TODAY_ISO,j.who+' · '+lbl+': '+j.title+(j.note?' · '+j.note:'')]);
     if(j.link && j.kind==='edit') c.driveEdited=j.link;
     if(j.kind==='edit' && c.cycle<2) c.cycle=2;
-    if(j.kind==='edit' && c.jobs.filter(x=>x.kind==='edit').every(x=>x.done) && !c.jobs.some(x=>x.kind==='post')){ const pj={id:'j'+Date.now(),title:'Post '+(c.brief?.deliverables||'this month\'s content'),kind:'post',who:'Lina',done:false}; c.jobs.push(pj); c.log.unshift([TODAY_ISO,'Edits complete · posting job created for Lina']); state.notifs.unshift({ic:'📱',k:'info',t:'New posting job for Lina',m:c.name+' · '+pj.title,cid:c.id,read:false}); }
+    if(j.kind==='edit' && c.jobs.filter(x=>x.kind==='edit').every(x=>x.done) && !c.jobs.some(x=>x.kind==='post')){ const pj={id:'j'+Date.now(),title:'Post '+(c.brief?.deliverables||'this month\'s content'),kind:'post',who:nameFor('social'),done:false}; c.jobs.push(pj); c.log.unshift([TODAY_ISO,'Edits complete · posting job created for Lina']); notify('📱','info','New posting job for '+nameFor('social'),c.name+' · '+pj.title,c.id,'social'); }
     if(j.kind==='post' && c.jobs.filter(x=>x.kind==='post').every(x=>x.done)) c.cycle=3;
     closeSheet(); notify(j.kind==='edit'?'✂️':'📱','good',j.who+' · '+lbl+': '+j.title,c.name+(j.note?' · '+j.note:''),c.id);
   }
   if(e.target.id==='jobForm'){
     const sel=$('#jobSeg .on'); const cid=+document.querySelector('[data-addjob]')?.dataset.addjob || state._jobCid;
-    const c=state._jobClient; const j={id:'j'+Date.now(),title:$('#j_title').value,kind:sel.dataset.kind,who:sel.dataset.who,done:false}; c.jobs.push(j); c.log.unshift([TODAY_ISO,'Job assigned to '+j.who+': '+j.title]); closeSheet(); notify('📨','info','New job for '+j.who,j.title+' · '+c.name,c.id); clientSheet(c.id);
+    const c=state._jobClient; const j={id:'j'+Date.now(),title:$('#j_title').value,kind:sel.dataset.kind,who:sel.dataset.who,done:false}; c.jobs.push(j); c.log.unshift([TODAY_ISO,'Job assigned to '+j.who+': '+j.title]); closeSheet(); notify('📨','info','New job for '+j.who,j.title+' · '+c.name,c.id,j.kind==='edit'?'editor':'social'); clientSheet(c.id);
   }
   if(e.target.id==='expForm'){ state.expenses.unshift({t:$('#e_t').value,amt:+$('#e_amt').value,d:$('#e_d').value}); closeSheet(); render(); toast('Expense saved'); }
 });
@@ -959,14 +1029,33 @@ document.addEventListener('change', e=>{
 });
 // remember which client a job sheet belongs to
 const _addJobSheet=addJobSheet; addJobSheet=function(cid){ state._jobClient=byId(cid); _addJobSheet(cid); };
-const _render=render; render=function(){ _render(); persist(); };
+const _render=render; render=function(){ if(!state.loaded) return; _render(); persist(); };
 // PWA: service worker + install hint
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
 let deferredInstall=null; window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); deferredInstall=e; const b=$('#installBar'); if(b) b.hidden=false; });
 document.addEventListener('click',e=>{ const t=e.target.closest('[data-install],[data-install-close]'); if(!t) return; if(t.dataset.install!==undefined && deferredInstall){ deferredInstall.prompt(); deferredInstall=null; } $('#installBar').hidden=true; });
 const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream; const standalone=window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 window.addEventListener('load',()=>{ if(isIOS && !standalone){ const b=$('#installBar'); if(b){ b.hidden=false; $('#installTxt').textContent='Install: tap Share ⎙ then “Add to Home Screen”'; $('#installBtn').hidden=true; } } });
-state.clients=shiftSeed(state.clients); state.expenses=shiftSeed(state.expenses); restore(); render();
+let sbUser=null;
+function showLogin(msg){ $('#login').hidden=false; $('#app').hidden=true; $('#loginErr').textContent=msg||''; $('#loginErr').hidden=!msg; }
+async function boot(session){
+  if(!session){ showLogin(); return; }
+  sbUser=session.user;
+  const {data:prof,error}=await sb.from('crm_profiles').select('user_id,name,role').eq('user_id',sbUser.id).maybeSingle();
+  if(error||!prof){ await sb.auth.signOut(); showLogin('This account has no role in the CRM. Ask the owner.'); return; }
+  state.me=prof; state.role=prof.role; restore(); await loadAll(); subscribe();
+  $('#login').hidden=true; $('#app').hidden=false; render();
+  if(state.role==='owner' && !state.clients.length) toast('Empty for now — add a client with + or load demo clients from your name menu');
+}
+document.getElementById('loginForm').addEventListener('submit', async e=>{
+  e.preventDefault(); const b=$('#loginBtn'); b.disabled=true; b.textContent='Signing in…';
+  const {data,error}=await sb.auth.signInWithPassword({email:$('#lEmail').value.trim(),password:$('#lPass').value});
+  b.disabled=false; b.textContent='Sign in';
+  if(error){ showLogin('Wrong email or password.'); return; }
+  boot(data.session);
+});
+sb.auth.getSession().then(({data})=>boot(data.session));
+sb.auth.onAuthStateChange((ev,session)=>{ if(ev==='SIGNED_OUT'){ showLogin(); } });
 </script>
 </body>
 </html>
