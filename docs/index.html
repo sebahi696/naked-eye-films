@@ -759,8 +759,9 @@ const depositPct = c => isNaN(+c.payPlan) ? 0 : +c.payPlan;
 const SB_URL='https://hicwqzsrkvoyihshfccx.supabase.co', SB_KEY='sb_publishable_x-M-_XxXlX9b2L_TkItWcA_pALXUzz5';
 const sb = window.supabase.createClient(SB_URL, SB_KEY);
 let snap = {clients:{}, expenses:{}}; let saving=false, dirty=false;
-const readIds = (()=>{ try{ return new Set(JSON.parse(localStorage.getItem('nef-read')||'[]')); }catch(_){ return new Set(); } })();
-function persist(){ dirty=true; if(!saving) flush(); try{ localStorage.setItem('nef-ui', JSON.stringify({screen:state.screen})); localStorage.setItem('nef-read', JSON.stringify([...readIds].slice(-300))); }catch(_){} }
+const readIds = new Set();
+async function markRead(ids){ ids=ids.filter(i=>i&&!readIds.has(i)); if(!ids.length) return; ids.forEach(i=>readIds.add(i)); const {error}=await sb.from('crm_notif_reads').upsert(ids.map(i=>({user_id:state.me.user_id,notif_id:i}))); if(error) console.error(error); }
+function persist(){ dirty=true; if(!saving) flush(); try{ localStorage.setItem('nef-ui', JSON.stringify({screen:state.screen}));  }catch(_){} }
 async function flush(){
   if(!state.loaded || !state.me) return; saving=true; dirty=false;
   try{
@@ -784,7 +785,8 @@ async function flush(){
   saving=false; if(dirty) flush();
 }
 async function loadAll(){
-  const [c,e,n,t]=await Promise.all([sb.from('crm_clients').select('id,data').order('updated_at'), sb.from('crm_expenses').select('id,data'), sb.from('crm_notifs').select('id,data,for_role,created_at').order('id',{ascending:false}).limit(60), sb.from('crm_profiles').select('user_id,name,role')]);
+  const [c,e,n,t,r]=await Promise.all([sb.from('crm_clients').select('id,data').order('updated_at'), sb.from('crm_expenses').select('id,data'), sb.from('crm_notifs').select('id,data,for_role,created_at').order('id',{ascending:false}).limit(60), sb.from('crm_profiles').select('user_id,name,role'), sb.from('crm_notif_reads').select('notif_id')]);
+  (r.data||[]).forEach(x=>readIds.add(x.notif_id));
   if(c.error||e.error||n.error||t.error){ toast('Could not load data'); console.error(c.error||e.error||n.error||t.error); return; }
   state.team=t.data||[];
   state.clients=(c.data||[]).map(r=>{ const d=r.data; d.id=isNaN(+r.id)?r.id:+r.id; return d; });
@@ -793,6 +795,22 @@ async function loadAll(){
   snap={clients:{},expenses:{}}; state.clients.forEach(x=>snap.clients[String(x.id)]=JSON.stringify(x)); state.expenses.forEach(x=>snap.expenses[x.id]=JSON.stringify(x));
   state.loaded=true;
 }
+// ---------- Push notifications ----------
+const VAPID_PUBLIC='BA-k8eL-5y101jDpaXcoehXBZHsrOBxNBgfh_qWmrbzJ6wQkFfsa-3UmYFZhaDrfuxi041Qzm8klrDEkEFpVh1c';
+const b64ToU8 = b => { const p='='.repeat((4-b.length%4)%4); const r=atob((b+p).replace(/-/g,'+').replace(/_/g,'/')); return Uint8Array.from([...r].map(c=>c.charCodeAt(0))); };
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+async function pushStatus(){ if(!pushSupported()) return isIOS&&!standalone ? 'ios-install' : 'unsupported'; if(Notification.permission==='denied') return 'denied'; const reg=await navigator.serviceWorker.getRegistration(); const sub=reg && await reg.pushManager.getSubscription(); return sub ? 'on' : 'off'; }
+async function enablePush(){
+  try{
+    const perm=await Notification.requestPermission(); if(perm!=='granted'){ toast('Notifications not allowed on this phone'); return; }
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription(); if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToU8(VAPID_PUBLIC)});
+    const {error}=await sb.from('crm_push_subs').upsert({endpoint:sub.endpoint, user_id:state.me.user_id, sub:sub.toJSON()}); if(error) throw error;
+    toast('Notifications on for this phone'); roleSheet();
+  }catch(e){ console.error(e); toast('Could not enable notifications'); }
+}
+async function disablePush(){ const reg=await navigator.serviceWorker.getRegistration(); const sub=reg && await reg.pushManager.getSubscription(); if(sub){ await sb.from('crm_push_subs').delete().eq('endpoint',sub.endpoint); await sub.unsubscribe(); } toast('Notifications off on this phone'); roleSheet(); }
+navigator.serviceWorker?.addEventListener('message', e=>{ if(e.data?.type==='open-client' && e.data.cid){ queueReload(); setTimeout(()=>{ const c=byId(e.data.cid); if(c) state.role==='owner'? clientSheet(c.id) : teamClientSheet(c.id); }, 800); } });
 let rt=null, reloadT=null;
 function subscribe(){
   if(rt) return;
@@ -801,7 +819,7 @@ function subscribe(){
 }
 function queueReload(isNotif){ clearTimeout(reloadT); reloadT=setTimeout(async()=>{ if(saving||dirty) return; const before=state.notifs[0]?.id; await loadAll(); render(); const first=state.notifs[0]; if(isNotif && first && first.id!==before && !first.read) toast('🔔 '+first.t); }, 400); }
 async function notify(ic,k,t,m,cid,forRole){
-  const row={ic,k,t,m,cid}; const fr=forRole|| (state.role==='owner' ? 'all' : 'owner');
+  const row={ic,k,t,m,cid,by:state.me?.user_id}; const fr=forRole|| (state.role==='owner' ? 'all' : 'owner');
   state.notifs.unshift({...row,read:false}); toast('🔔 '+t); render();
   const {error}=await sb.from('crm_notifs').insert({data:row,for_role:fr}); if(error) console.error(error);
 }
@@ -884,6 +902,7 @@ function addJobSheet(cid){
 function notifSheet(){
   openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">Pushed to your phone</div><h2>Notifications</h2></div><button class="x" data-close>×</button></div>
   <div class="card">${state.notifs.map((n,i)=>`<button class="notif" style="width:100%;text-align:left" data-notif="${i}"><div class="ic ${n.k}">${n.ic}</div><div style="flex:1"><div class="t">${n.t}${!n.read?' <span class="pill acc">new</span>':''}</div><div class="m">${n.m}</div></div></button>`).join('')}</div>
+  <div class="btns"><button class="btn sm" data-readall>Mark all as read</button></div>
   <div class="note">Rules that create these: discovery call the same morning · follow-up date reached · invoice unpaid 3 days after shoot · editor or social media marks a job done · shoot in 5 days / tomorrow · next month's bill.</div>`);
 }
 const FEEDBACK_PHONE=''; // owner of the project: +961… digits only; empty = copy-to-clipboard fallback
@@ -893,14 +912,23 @@ function feedbackSheet(){
   <div class="field"><label>Feedback</label><textarea id="fb_txt" rows="5" placeholder="e.g. In the discovery call I also need to ask about…"></textarea></div>
   <div class="btns"><button class="btn primary full" type="submit">${FEEDBACK_PHONE?'Send on WhatsApp':'Copy feedback'}</button></div></form>`,{form:true});
 }
-function roleSheet(){
-  const owner=state.role==='owner';
+async function roleSheet(){
+  const owner=state.role==='owner'; const ps=await pushStatus();
+  const pushRow = ({on:`<div class="kv"><span class="k">Notifications on this phone</span><span class="v" style="color:var(--good)">On</span></div><div class="btns"><button class="btn sm" data-push-off>Turn off</button></div>`,
+    off:`<div class="note">Get a notification on this phone even when the app is closed.</div><div class="btns"><button class="btn primary full" data-push-on>🔔 Turn on notifications</button></div>`,
+    denied:`<div class="note">Notifications are blocked for this app in your phone settings. Allow them there, then come back.</div>`,
+    'ios-install':`<div class="note">On iPhone, notifications only work after you add the app to your Home Screen: Share ⎙ → “Add to Home Screen”, then open it from there.</div>`,
+    unsupported:`<div class="note">This browser can't receive notifications. Use Chrome (Android) or add to Home Screen (iPhone).</div>`})[ps];
   openSheet(`<div class="sheet-head"><div style="flex:1"><div class="eyebrow">Signed in</div><h2>${state.me?.name||''}</h2><div style="font-size:13px;color:var(--muted)">${({owner:'Owner · everything',editor:'Editor · editing jobs only',social:'Social media · posting jobs only'})[state.role]} · ${sbUser?.email||''}</div></div><button class="x" data-close>×</button></div>
-  <div class="card"><h3>Team</h3>${state.team.map(t=>`<div class="check"><span class="av" style="width:30px;height:30px;border-radius:8px;background:var(--surface2);display:grid;place-items:center;font-size:11px;font-weight:700">${initials(t.name)}</span><span>${t.name}</span><span class="who">${({owner:'Owner',editor:'Editor',social:'Social media'})[t.role]}</span></div>`).join('')}</div>
+  <div class="card"><h3>Notifications</h3>${pushRow}</div>
+  <div class="card"><h3>Password</h3><form id="pwForm"><div class="grid2"><div class="field"><label>New password</label><input id="pw1" type="password" minlength="8" required autocomplete="new-password" placeholder="8+ characters"></div><div class="field"><label>Repeat</label><input id="pw2" type="password" minlength="8" required autocomplete="new-password"></div></div><div class="btns" style="margin-top:0"><button class="btn sm" type="submit">Change my password</button></div></form></div>
+  <div class="card"><h3>Team</h3>${state.team.map(t=>`<div class="check"><span class="av" style="width:30px;height:30px;border-radius:8px;background:var(--surface2);display:grid;place-items:center;font-size:11px;font-weight:700">${initials(t.name)}</span><span>${t.name}</span><span class="who">${({owner:'Owner',editor:'Editor',social:'Social media'})[t.role]}${owner&&t.user_id!==state.me.user_id?` · <button class="btn sm" style="min-height:30px;padding:3px 8px;margin-left:6px" data-resetpw="${t.user_id}" data-name="${t.name}">Reset password</button>`:''}</span></div>`).join('')}<div id="resetOut"></div></div>
   <div class="btns" style="margin-top:16px"><button class="btn primary full" data-feedback>💬 Send feedback about the app</button></div>
   ${owner?`<div class="btns"><button class="btn sm" data-seed>Load demo clients</button><button class="btn ghost sm" data-reset>Delete all data</button></div><div class="note">Everyone on the team sees the same data, live. "Load demo clients" adds example clients so you can test with something; "Delete all data" clears every client, expense and notification.</div>`:''}
   <div class="btns"><button class="btn ghost full" data-signout>Sign out</button></div>`);
 }
+async function adminCall(body){ const {data:{session}}=await sb.auth.getSession(); const r=await fetch(SB_URL+'/functions/v1/crm-admin',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+session.access_token},body:JSON.stringify(body)}); return r.json(); }
+const genPw = () => { const w=['Frame','Reel','Lens','Shot','Scene','Cut','Light','Focus','Grade','Take']; return w[Math.floor(Math.random()*w.length)]+'-'+w[Math.floor(Math.random()*w.length)]+'-'+(100+Math.floor(Math.random()*900)); };
 function expenseSheet(){
   openSheet(`<div class="sheet-head"><div style="flex:1"><h2>Add expense</h2></div><button class="x" data-closeform>×</button></div>
   <form id="expForm"><div class="field"><label>What</label><input id="e_t" required placeholder="e.g. Drone rental"></div><div class="grid2"><div class="field"><label>Amount ($)</label><input id="e_amt" type="number" required min="1"></div><div class="field"><label>Date</label><input id="e_d" type="date" value="${TODAY_ISO}"></div></div><div class="btns"><button class="btn primary full" type="submit">Save</button></div></form>`,{form:true});
@@ -908,7 +936,7 @@ function expenseSheet(){
 
 // ---------- Events ----------
 document.addEventListener('click', e=>{
-  const t = e.target.closest('[data-go],[data-open],[data-close],[data-closeform],[data-keep],[data-discard],[data-reset],[data-reset-yes],[data-seed],[data-signout],[data-leadtab],[data-activetab],[data-teamtab],[data-advance],[data-snooze],[data-cycle],[data-newmonth],[data-addjob],[data-pay-amt],[data-remind],[data-job],[data-role],[data-notif],[data-pay],[data-who],[data-addexp],[data-brief],[data-call],[data-prompt],[data-copy],[data-teamopen],[data-jobdone],[data-feedback],[data-reminder],[data-tpl],[data-wa],[data-jump],[data-chip],[data-dep],[data-addrow],[data-delrow],[data-segv],#fab,#bellBtn,#roleBtn');
+  const t = e.target.closest('[data-go],[data-open],[data-close],[data-closeform],[data-keep],[data-discard],[data-reset],[data-reset-yes],[data-seed],[data-signout],[data-readall],[data-push-on],[data-push-off],[data-resetpw],[data-leadtab],[data-activetab],[data-teamtab],[data-advance],[data-snooze],[data-cycle],[data-newmonth],[data-addjob],[data-pay-amt],[data-remind],[data-job],[data-role],[data-notif],[data-pay],[data-who],[data-addexp],[data-brief],[data-call],[data-prompt],[data-copy],[data-teamopen],[data-jobdone],[data-feedback],[data-reminder],[data-tpl],[data-wa],[data-jump],[data-chip],[data-dep],[data-addrow],[data-delrow],[data-segv],#fab,#bellBtn,#roleBtn');
   if(!t) return;
   if(t.dataset.jobdone){ e.stopPropagation(); jobDoneSheet(t.dataset.jobdone,+t.dataset.cid); return; }
   if(t.dataset.teamopen){ if(e.target.closest('a')) return; state.role==='owner'? clientSheet(+t.dataset.teamopen) : teamClientSheet(+t.dataset.teamopen); return; }
@@ -933,6 +961,10 @@ document.addEventListener('click', e=>{
   }
   if(t.dataset.keep!==undefined){ t.closest('.discard').remove(); return; }
   if(t.dataset.discard!==undefined){ closeSheet(); return; }
+  if(t.dataset.pushOn!==undefined){ enablePush(); return; }
+  if(t.dataset.pushOff!==undefined){ disablePush(); return; }
+  if(t.dataset.resetpw){ const pw=genPw(); t.disabled=true; t.textContent='…'; adminCall({action:'reset_password',user_id:t.dataset.resetpw,password:pw}).then(r=>{ t.disabled=false; t.textContent='Reset password'; const out=$('#resetOut'); if(r.ok){ out.innerHTML=`<div class="note" style="background:var(--good-bg)">New password for <b>${t.dataset.name}</b>: <b class="num" style="user-select:all">${pw}</b><br>Send it to them on WhatsApp. They can change it later under their name.</div>`; } else out.innerHTML=`<div class="note" style="background:var(--bad-bg)">${r.error||'Failed'}</div>`; }); return; }
+  if(t.dataset.readall!==undefined){ state.notifs.forEach(n=>n.read=true); markRead(state.notifs.map(n=>n.id)); render(); notifSheet(); return; }
   if(t.dataset.signout!==undefined){ sb.auth.signOut().then(()=>location.reload()); return; }
   if(t.dataset.seed!==undefined){ const seed=shiftSeed(SEED); const ids=new Set(state.clients.map(c=>String(c.id))); seed.clients.forEach(c=>{ if(!ids.has(String(c.id))) state.clients.push(c); }); seed.expenses.forEach(e=>{ if(!state.expenses.some(x=>x.t===e.t)) state.expenses.push(e); }); closeSheet(); render(); toast('Demo clients loaded'); return; }
   if(t.dataset.reset!==undefined){ const sh=t.closest('.sheet'); if(!sh.querySelector('.discard')){ const bar=document.createElement('div'); bar.className='discard'; bar.innerHTML='<span>Delete every client, expense and notification for the whole team?</span><button class="btn sm" data-keep>Keep</button><button class="btn sm" style="color:var(--bad)" data-reset-yes>Yes, delete all</button>'; sh.insertBefore(bar, sh.children[1]); } return; }
@@ -955,7 +987,7 @@ document.addEventListener('click', e=>{
   if(t.dataset.pay){ t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); return; }
   if(t.dataset.who){ t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); return; }
   
-  if(t.dataset.notif){ const n=state.notifs[+t.dataset.notif]; n.read=true; if(n.id) readIds.add(n.id); render(); if(n.cid) clientSheet(n.cid); else closeSheet(); return; }
+  if(t.dataset.notif){ const n=state.notifs[+t.dataset.notif]; n.read=true; markRead([n.id]); render(); if(n.cid) clientSheet(n.cid); else closeSheet(); return; }
 
   if(t.dataset.advance){
     const c=byId(+t.dataset.advance);
@@ -995,6 +1027,10 @@ document.addEventListener('submit', e=>{
     const c=byId(+e.target.dataset.cid); c.cycle=2; c.driveRaw=$('#e_raw').value.trim()||c.driveRaw; c.teamNotes=$('#e_notes').value.trim();
     const j={id:'j'+Date.now(),title:$('#e_title').value.trim(),kind:'edit',who:nameFor('editor'),done:false}; (c.jobs=c.jobs||[]).push(j);
     c.log.unshift([TODAY_ISO,'Sent to editing · job for Jad: '+j.title]); closeSheet(); render(); notify('✂️','info','New editing job for '+nameFor('editor'),c.name+' · '+j.title,c.id,'editor'); clientSheet(c.id);
+  }
+  if(e.target.id==='pwForm'){
+    const a=$('#pw1').value, b=$('#pw2').value; if(a!==b){ toast('The two passwords differ'); return; }
+    sb.auth.updateUser({password:a}).then(({error})=>{ if(error) toast(error.message); else { toast('Password changed'); $('#pw1').value=''; $('#pw2').value=''; } }); return;
   }
   if(e.target.id==='fbForm'){
     const msg='NEF app feedback · '+$('#fb_where').value+' · '+roleName()+'\n'+$('#fb_txt').value.trim();
